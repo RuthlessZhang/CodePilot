@@ -61,7 +61,7 @@ $env:ANTHROPIC_API_KEY="..."
 npm run dev -- --provider anthropic
 ```
 
-CodePilot also reads `.codepilot.json` for `provider`, `model`, `baseUrl`, `maxSteps`, `maxToolCalls`, `headlessMaxRuntimeMs`, `contextBudgetTokens`, `autoVerify`, `maxVerificationAttempts`, `providerMaxRetries`, `providerRequestTimeoutMs`, `autoApprove`, and `permissions`. Keep API keys in environment variables.
+CodePilot also reads `.codepilot.json` for `provider`, `model`, `baseUrl`, `maxSteps`, `maxToolCalls`, `headlessMaxRuntimeMs`, `contextBudgetTokens`, `autoVerify`, `maxVerificationAttempts`, `providerMaxRetries`, `providerRequestTimeoutMs`, `autoApprove`, `permissions`, `runtimeAudit`, `runtimeAuditPath`, `runtimeHookTimeoutMs`, and `protectedPaths`. Keep API keys in environment variables.
 
 Provider requests retry transient network failures, timeouts, malformed protocol responses, HTTP 408/425/429, and selected 5xx responses with bounded exponential backoff. `Retry-After` is honored up to 30 seconds. Client errors such as HTTP 400 are not retried, and `Ctrl+C` cancels both an active request and a pending retry delay. Defaults can be adjusted per project:
 
@@ -343,6 +343,25 @@ Hooks are ordered and fail-isolated:
 - hook exceptions and timeouts are reported through `onHookError` without failing the Agent task;
 - caller cancellation is propagated through the hook `AbortSignal`;
 - `edit.preparing` can protect generated files or sensitive directories before a write starts.
+
+The CLI enables a local JSONL audit by default at `.codepilot/audit/runtime.jsonl`. Prompt text, patches, file contents, and replacement text are stored only as length plus SHA-256; API keys, authorization headers, cookies, credentials, passwords, secrets, and tokens are replaced with `[REDACTED]`. The audit path is restricted to the active workspace.
+
+Project configuration can disable or relocate the audit and add path-protection Hooks without loading executable code:
+
+```json
+{
+  "runtimeAudit": true,
+  "runtimeAuditPath": ".codepilot/audit/runtime.jsonl",
+  "runtimeHookTimeoutMs": 5000,
+  "protectedPaths": [
+    "generated/**",
+    "vendor/**",
+    "docs/published/*.md"
+  ]
+}
+```
+
+`protectedPaths` applies to direct file edits and every file block inside an `apply_patch` transaction. A matching write is rejected before tool execution and still cannot bypass plan mode or normal permission checks.
 
 ```ts
 const runtimeEvents = new RuntimeEventBus({

@@ -56,7 +56,7 @@ export type RuntimeEventOutcome<Name extends RuntimeEventName> = {
 export type RuntimeEventBusOptions = {
   hooks?: readonly RuntimeHook[];
   hookTimeoutMs?: number;
-  onEvent?: (event: AnyRuntimeEvent) => void;
+  onEvent?: (event: AnyRuntimeEvent) => void | Promise<void>;
   onHookError?: (failure: RuntimeHookError) => void;
 };
 
@@ -104,9 +104,9 @@ export class RuntimeEventBus {
     }) as RuntimeEvent<Name>;
 
     try {
-      this.options.onEvent?.(event as AnyRuntimeEvent);
+      await this.options.onEvent?.(event as AnyRuntimeEvent);
     } catch (error) {
-      this.options.onHookError?.({ hook: "onEvent", event: input.name, error: asError(error) });
+      this.reportHookError({ hook: "onEvent", event: input.name, error: asError(error) });
     }
 
     let denied: RuntimeEventOutcome<Name>["denied"];
@@ -117,7 +117,7 @@ export class RuntimeEventBus {
         if (result?.deny && !denied) denied = { hook: hook.name, reason: result.deny };
       } catch (error) {
         if (input.signal?.aborted && asError(error).name === "AbortError") throw error;
-        this.options.onHookError?.({ hook: hook.name, event: input.name, error: asError(error) });
+        this.reportHookError({ hook: hook.name, event: input.name, error: asError(error) });
       }
     }
     return { event, ...(denied ? { denied } : {}) };
@@ -125,6 +125,14 @@ export class RuntimeEventBus {
 
   forgetRun(runId: string) {
     this.sequences.delete(runId);
+  }
+
+  private reportHookError(failure: RuntimeHookError) {
+    try {
+      this.options.onHookError?.(failure);
+    } catch {
+      // Error reporting is observational and must never break the Agent loop.
+    }
   }
 
   private async runHook(hook: RuntimeHook, event: AnyRuntimeEvent, parentSignal?: AbortSignal) {

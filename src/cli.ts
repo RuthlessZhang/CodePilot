@@ -14,6 +14,7 @@ import { saveProjectIndex, summarizeProjectIndex } from "./project.js";
 import { approval, nonInteractiveApproval } from "./permissions.js";
 import { readTodos, summarizeTodos } from "./todo.js";
 import { listSessions } from "./sessions.js";
+import { createConfiguredRuntime } from "./runtime-config.js";
 import {
   AnthropicProvider,
   DeepSeekProvider,
@@ -134,6 +135,9 @@ async function main() {
   const disposeTools = async () => {
     await Promise.allSettled(tools.map((tool) => tool.dispose?.()));
   };
+  const runtimeEvents = createConfiguredRuntime(root, config, ({ hook, event, error }) => {
+    if (!headless || verbose) console.error(`[hook:error] ${hook} on ${event}: ${error.message}`);
+  });
   const agent = new Agent({
     root,
     provider,
@@ -149,6 +153,7 @@ async function main() {
     mode,
     onText: headless ? undefined : (text) => console.log(text),
     onToolEvent: renderToolEvent,
+    runtimeEvents,
   });
 
   const setMode = (next: AgentMode) => {

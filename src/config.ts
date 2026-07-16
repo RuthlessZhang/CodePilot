@@ -21,6 +21,10 @@ export type Config = {
   providerRequestTimeoutMs: number;
   autoApprove: Risk[];
   permissions: PermissionPolicy;
+  runtimeAudit: boolean;
+  runtimeAuditPath: string;
+  runtimeHookTimeoutMs: number;
+  protectedPaths: string[];
 };
 
 const defaults: Record<
@@ -78,6 +82,12 @@ function boundedInteger(value: unknown, fallback: number, minimum: number, maxim
     : fallback;
 }
 
+function stringArray(value: unknown) {
+  return Array.isArray(value)
+    ? [...new Set(value.filter((item): item is string => typeof item === "string" && item.trim().length > 0).map((item) => item.trim()))]
+    : [];
+}
+
 export async function loadConfig(
   cwd: string,
   overrides: Partial<Config> = {},
@@ -93,6 +103,8 @@ export async function loadConfig(
 
   const provider = overrides.provider ?? fileConfig.provider ?? inferProvider();
   const providerDefaults = defaults[provider];
+  const runtimeAudit = overrides.runtimeAudit ?? fileConfig.runtimeAudit;
+  const runtimeAuditPath = overrides.runtimeAuditPath ?? fileConfig.runtimeAuditPath;
 
   return {
     provider,
@@ -126,5 +138,16 @@ export async function loadConfig(
     ),
     autoApprove: fileConfig.autoApprove ?? ["read"],
     permissions: permissionPolicy(fileConfig.permissions),
+    runtimeAudit: typeof runtimeAudit === "boolean" ? runtimeAudit : true,
+    runtimeAuditPath: typeof runtimeAuditPath === "string" && runtimeAuditPath.trim()
+      ? runtimeAuditPath
+      : ".codepilot/audit/runtime.jsonl",
+    runtimeHookTimeoutMs: boundedInteger(
+      overrides.runtimeHookTimeoutMs ?? fileConfig.runtimeHookTimeoutMs,
+      5_000,
+      10,
+      60_000,
+    ),
+    protectedPaths: stringArray(overrides.protectedPaths ?? fileConfig.protectedPaths),
   };
 }
