@@ -1,0 +1,130 @@
+import { readFile } from "node:fs/promises";
+import path from "node:path";
+import type { Risk } from "./types.js";
+
+export type ProviderName = "openai" | "anthropic" | "deepseek";
+export type PermissionDecision = "allow" | "ask" | "deny";
+export type PermissionPolicy = Record<string, PermissionDecision>;
+
+export type Config = {
+  provider: ProviderName;
+  model: string;
+  apiKey?: string;
+  baseUrl: string;
+  maxSteps: number;
+  maxToolCalls: number;
+  headlessMaxRuntimeMs: number;
+  contextBudgetTokens: number;
+  autoVerify: boolean;
+  maxVerificationAttempts: number;
+  providerMaxRetries: number;
+  providerRequestTimeoutMs: number;
+  autoApprove: Risk[];
+  permissions: PermissionPolicy;
+};
+
+const defaults: Record<
+  ProviderName,
+  {
+    model: string;
+    apiKeyEnv: string;
+    modelEnv: string;
+    baseUrlEnv: string;
+    baseUrl: string;
+  }
+> = {
+  openai: {
+    model: "gpt-4.1",
+    apiKeyEnv: "OPENAI_API_KEY",
+    modelEnv: "OPENAI_MODEL",
+    baseUrlEnv: "OPENAI_BASE_URL",
+    baseUrl: "https://api.openai.com/v1",
+  },
+  anthropic: {
+    model: "claude-sonnet-4-5",
+    apiKeyEnv: "ANTHROPIC_API_KEY",
+    modelEnv: "ANTHROPIC_MODEL",
+    baseUrlEnv: "ANTHROPIC_BASE_URL",
+    baseUrl: "https://api.anthropic.com",
+  },
+  deepseek: {
+    model: "deepseek-v4-pro",
+    apiKeyEnv: "DEEPSEEK_API_KEY",
+    modelEnv: "DEEPSEEK_MODEL",
+    baseUrlEnv: "DEEPSEEK_BASE_URL",
+    baseUrl: "https://api.deepseek.com",
+  },
+};
+
+function inferProvider(): ProviderName {
+  if (process.env.DEEPSEEK_API_KEY) return "deepseek";
+  if (process.env.ANTHROPIC_API_KEY) return "anthropic";
+  return "openai";
+}
+
+function permissionPolicy(value: unknown): PermissionPolicy {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  return Object.fromEntries(
+    Object.entries(value).filter(
+      (entry): entry is [string, PermissionDecision] =>
+        entry[1] === "allow" || entry[1] === "ask" || entry[1] === "deny",
+    ),
+  );
+}
+
+function boundedInteger(value: unknown, fallback: number, minimum: number, maximum: number) {
+  return typeof value === "number" && Number.isInteger(value)
+    ? Math.max(minimum, Math.min(maximum, value))
+    : fallback;
+}
+
+export async function loadConfig(
+  cwd: string,
+  overrides: Partial<Config> = {},
+): Promise<Config> {
+  let fileConfig: Partial<Config> = {};
+  try {
+    fileConfig = JSON.parse(
+      await readFile(path.join(cwd, ".codepilot.json"), "utf8"),
+    );
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+
+  const provider = overrides.provider ?? fileConfig.provider ?? inferProvider();
+  const providerDefaults = defaults[provider];
+
+  return {
+    provider,
+    model:
+      overrides.model ??
+      fileConfig.model ??
+      process.env[providerDefaults.modelEnv] ??
+      providerDefaults.model,
+    apiKey: fileConfig.apiKey ?? process.env[providerDefaults.apiKeyEnv],
+    baseUrl:
+      fileConfig.baseUrl ??
+      process.env[providerDefaults.baseUrlEnv] ??
+      providerDefaults.baseUrl,
+    maxSteps: boundedInteger(overrides.maxSteps ?? fileConfig.maxSteps, 30, 1, 500),
+    maxToolCalls: boundedInteger(overrides.maxToolCalls ?? fileConfig.maxToolCalls, 100, 1, 2_000),
+    headlessMaxRuntimeMs: boundedInteger(
+      overrides.headlessMaxRuntimeMs ?? fileConfig.headlessMaxRuntimeMs,
+      900_000,
+      1_000,
+      86_400_000,
+    ),
+    contextBudgetTokens: fileConfig.contextBudgetTokens ?? 64000,
+    autoVerify: fileConfig.autoVerify ?? true,
+    maxVerificationAttempts: fileConfig.maxVerificationAttempts ?? 3,
+    providerMaxRetries: boundedInteger(overrides.providerMaxRetries ?? fileConfig.providerMaxRetries, 2, 0, 5),
+    providerRequestTimeoutMs: boundedInteger(
+      overrides.providerRequestTimeoutMs ?? fileConfig.providerRequestTimeoutMs,
+      120_000,
+      1_000,
+      600_000,
+    ),
+    autoApprove: fileConfig.autoApprove ?? ["read"],
+    permissions: permissionPolicy(fileConfig.permissions),
+  };
+}
