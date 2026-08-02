@@ -4,10 +4,10 @@ import { invalidateCodeGraph } from "./code-graph.js";
 import { formatContextReport, packContext, type ContextReport } from "./context-manager.js";
 import { loadInstructions } from "./instructions.js";
 import { readProjectIndex, summarizeProjectIndex } from "./project.js";
-import { appendSessionSummary, readSessionSummary } from "./session-summary.js";
+import { appendSessionSummary, migrateLegacySessionSummary, readSessionSummary } from "./session-summary.js";
 import { summarizeWithDeepSeekFlash, type SummaryResult } from "./summarizer.js";
 import { selectWorkspaceContext } from "./workspace-context.js";
-import { createSessionId, getSessionInfo, loadSession, saveSession } from "./sessions.js";
+import { createSessionId, getSessionInfo, listSessions, loadSession, saveSession } from "./sessions.js";
 import { VerificationController, type VerificationResult } from "./verification.js";
 import { RuntimeEventBus, type RuntimeEventDataMap, type RuntimeEventName } from "./runtime-events.js";
 import { ToolRegistry } from "./tool-registry.js";
@@ -136,7 +136,7 @@ export class Agent {
       signal.throwIfAborted();
       if (this.activeRunStats) this.activeRunStats.modelSteps = step + 1;
       let packed = packContext(
-        await system(this.options.root, this.options.mode, prompt, this.workspaceContext),
+        await system(this.options.root, this.options.mode, this.sessionId, prompt, this.workspaceContext),
         this.messages,
         this.options.contextBudgetTokens,
       );
@@ -146,13 +146,14 @@ export class Agent {
         this.lastSummary = summary;
         await appendSessionSummary(
           this.options.root,
+          this.sessionId,
           oldMessages,
           async () => `## ${new Date().toISOString()} (${summary.mode}: ${summary.model})\n${summary.text}\n`,
         );
         this.messages = this.messages.slice(packed.report.omittedMessages);
         await this.save();
         packed = packContext(
-          await system(this.options.root, this.options.mode, prompt, this.workspaceContext),
+          await system(this.options.root, this.options.mode, this.sessionId, prompt, this.workspaceContext),
           this.messages,
           this.options.contextBudgetTokens,
         );
@@ -344,12 +345,17 @@ export class Agent {
   }
 
   async load(id?: string) {
-    const messages = await loadSession(this.options.root, id);
+    const info = id
+      ? await getSessionInfo(this.options.root, id)
+      : (await listSessions(this.options.root))[0];
+    const resolvedId = info?.id ?? id;
+    const messages = await loadSession(this.options.root, resolvedId);
     if (!messages) return false;
     this.messages = sanitizeMessages(messages);
-    if (id) {
-      this.sessionId = id;
-      this.sessionCreatedAt = (await getSessionInfo(this.options.root, id))?.createdAt ?? this.sessionCreatedAt;
+    if (resolvedId) {
+      this.sessionId = resolvedId;
+      this.sessionCreatedAt = info?.createdAt ?? this.sessionCreatedAt;
+      await migrateLegacySessionSummary(this.options.root, resolvedId);
     }
     return true;
   }
@@ -366,6 +372,7 @@ export class Agent {
     this.lastSummary = summary;
     await appendSessionSummary(
       this.options.root,
+      this.sessionId,
       oldMessages,
       async () => `## ${new Date().toISOString()} (${summary.mode}: ${summary.model})\n${summary.text}\n`,
     );
@@ -376,7 +383,7 @@ export class Agent {
 
   async contextReport() {
     const packed = packContext(
-      await system(this.options.root, this.options.mode),
+      await system(this.options.root, this.options.mode, this.sessionId),
       this.messages,
       this.options.contextBudgetTokens,
     );
@@ -479,13 +486,13 @@ function withoutEmptyToolCalls(message: Message): Message {
   return { role: "assistant", content: message.content };
 }
 
-async function system(root: string, mode: AgentMode, query?: string, workspaceContext = "") {
+async function system(root: string, mode: AgentMode, sessionId: string, query?: string, workspaceContext = "") {
   const index = await readProjectIndex(root);
   const indexSummary = index
     ? `\n\nProject index:\n${summarizeProjectIndex(index)}`
     : "";
   const instructions = await loadInstructions(root, query);
-  const summary = await readSessionSummary(root);
+  const summary = await readSessionSummary(root, sessionId);
 
   const modeRules =
     mode === "plan"

@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { formatCommandResult, runCommand } from "./command-runner.js";
 import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { applyCodePilotPatch, contentHash, patchPaths, writeTextFileAtomic, type PatchTransactionResult } from "./patch.js";
@@ -12,6 +12,8 @@ import type { Tool } from "./types.js";
 type ToolHooks = {
   beforeWrite?: (absPath: string) => Promise<void>;
   onOutput?: (name: string, chunk: string) => void;
+  shellTimeoutMs?: number;
+  shellMaxOutputChars?: number;
 };
 
 const schema = (properties: unknown, required: string[] = []) => ({
@@ -93,56 +95,16 @@ function lineSlice(content: string, startLine: number, endLine?: number) {
   return lines.slice(startLine - 1, end).map((line, index) => `${startLine + index}: ${line}`).join("\n");
 }
 
-function cancellationError() {
-  const error = new Error("Operation cancelled");
-  error.name = "AbortError";
-  return error;
-}
-
-function run(root: string, command: string, onOutput?: (chunk: string) => void, signal?: AbortSignal) {
-  return new Promise<string>((resolve, reject) => {
-    if (signal?.aborted) return reject(cancellationError());
-    const child = spawn(command, { cwd: root, shell: true, windowsHide: true });
-    const maxOutputChars = 1_000_000;
-    let output = "";
-    let truncated = false;
-    let timedOut = false;
-    let settled = false;
-    const append = (chunk: Buffer) => {
-      const text = chunk.toString();
-      onOutput?.(text);
-      if (output.length >= maxOutputChars) {
-        truncated = true;
-        return;
-      }
-      output += text.slice(0, maxOutputChars - output.length);
-      if (output.length >= maxOutputChars) truncated = true;
-    };
-    const timeout = setTimeout(() => {
-      timedOut = true;
-      child.kill();
-    }, 120000);
-    const onAbort = () => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timeout);
-      child.kill();
-      reject(cancellationError());
-    };
-    signal?.addEventListener("abort", onAbort, { once: true });
-
-    child.stdout.on("data", append);
-    child.stderr.on("data", append);
-    child.on("error", (error) => append(Buffer.from(`Unable to start command: ${error.message}\n`)));
-    child.on("close", (code) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timeout);
-      signal?.removeEventListener("abort", onAbort);
-      const suffix = `${truncated ? "\n[output truncated]" : ""}${timedOut ? "\n[command timed out after 120s]" : ""}`;
-      resolve(`exit_code: ${timedOut ? 124 : code ?? 1}\n${output}${suffix}`);
-    });
-  });
+function run(
+  root: string,
+  command: string,
+  onOutput?: (chunk: string) => void,
+  signal?: AbortSignal,
+  timeoutMs = 120_000,
+  maxOutputChars = 1_000_000,
+) {
+  return runCommand({ root, command, onOutput, signal, timeoutMs, maxOutputChars })
+    .then(formatCommandResult);
 }
 
 export function createTools(root: string, hooks: ToolHooks = {}): Tool[] {
@@ -486,10 +448,20 @@ export function createTools(root: string, hooks: ToolHooks = {}): Tool[] {
       definition: {
         name: "shell",
         description: "Run a shell command in the workspace.",
-        inputSchema: schema({ command: { type: "string" } }, ["command"]),
+        inputSchema: schema({
+          command: { type: "string" },
+          timeout_ms: { type: "integer", minimum: 100, maximum: 900000 },
+        }, ["command"]),
       },
       async execute(args, context) {
-        return await run(root, stringArg(args.command), (chunk) => hooks.onOutput?.("shell", chunk), context?.signal);
+        return await run(
+          root,
+          stringArg(args.command),
+          (chunk) => hooks.onOutput?.("shell", chunk),
+          context?.signal,
+          Math.min(900_000, Math.max(100, numberArg(args.timeout_ms, hooks.shellTimeoutMs ?? 120_000))),
+          hooks.shellMaxOutputChars ?? 1_000_000,
+        );
       },
     },
     {

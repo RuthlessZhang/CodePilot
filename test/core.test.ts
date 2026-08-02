@@ -426,6 +426,10 @@ test("saves indexed sessions and resumes an exact session id", async () => {
   assert.equal(sessions[0].id, id);
   assert.equal(sessions[0].messageCount, 2);
 
+  const continued = new Agent(options);
+  assert.equal(await continued.load(), true);
+  assert.equal(continued.getSessionId(), id);
+
   const resumed = new Agent(options);
   assert.equal(await resumed.load(id), true);
   await resumed.run("continue");
@@ -758,7 +762,7 @@ test("compacts old messages into session summary", async () => {
   await agent.run("second message");
   const compacted = await agent.compact(2);
   assert.ok(compacted.count > 0);
-  assert.match(await readSessionSummary(root), /first message/);
+  assert.match(await readSessionSummary(root, agent.getSessionId()), /first message/);
   assert.match(await agent.contextReport(), /budgetTokens:/);
 });
 
@@ -784,7 +788,83 @@ test("auto compacts omitted messages before provider call", async () => {
   await agent.run("x".repeat(12000));
   await agent.run("current");
   assert.ok(seenMessages < 4);
-  assert.match(await readSessionSummary(root), /user:/);
+  assert.match(await readSessionSummary(root, agent.getSessionId()), /user:/);
+});
+
+test("keeps compacted summaries isolated by session", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "codepilot-"));
+  const provider: Provider = {
+    async complete() {
+      return { text: "done", toolCalls: [] };
+    },
+  };
+  const options = {
+    root,
+    provider,
+    tools: createTools(root),
+    approve: async () => true,
+    maxSteps: 3,
+    contextBudgetTokens: 64000,
+    mode: "build" as const,
+  };
+
+  const first = new Agent(options);
+  await first.run("alpha durable detail");
+  await first.run("alpha current task");
+  await first.compact(2);
+
+  const second = new Agent(options);
+  await second.run("beta durable detail");
+  await second.run("beta current task");
+  await second.compact(2);
+
+  const firstSummary = await readSessionSummary(root, first.getSessionId());
+  const secondSummary = await readSessionSummary(root, second.getSessionId());
+  assert.match(firstSummary, /alpha durable detail/);
+  assert.doesNotMatch(firstSummary, /beta durable detail/);
+  assert.match(secondSummary, /beta durable detail/);
+  assert.doesNotMatch(secondSummary, /alpha durable detail/);
+
+  let system = "";
+  const fresh = new Agent({
+    ...options,
+    provider: {
+      async complete(input) {
+        system = input.system;
+        return { text: "fresh", toolCalls: [] };
+      },
+    },
+  });
+  await fresh.run("unrelated fresh session");
+  assert.doesNotMatch(system, /alpha durable detail|beta durable detail/);
+});
+
+test("migrates one legacy summary when its session is resumed", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "codepilot-"));
+  const provider: Provider = {
+    async complete() {
+      return { text: "done", toolCalls: [] };
+    },
+  };
+  const options = {
+    root,
+    provider,
+    tools: createTools(root),
+    approve: async () => true,
+    maxSteps: 3,
+    contextBudgetTokens: 64000,
+    mode: "build" as const,
+  };
+  const original = new Agent(options);
+  await original.run("seed session");
+  const id = original.getSessionId();
+  const legacy = path.join(root, ".codepilot", "session-summary.md");
+  await writeFile(legacy, "legacy compacted context");
+
+  const resumed = new Agent(options);
+  assert.equal(await resumed.load(id), true);
+  assert.equal(await readSessionSummary(root, id), "legacy compacted context");
+  await assert.rejects(readFile(legacy));
 });
 
 test("deepseek flash summarizer falls back without api key", async () => {

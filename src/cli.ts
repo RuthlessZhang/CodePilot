@@ -131,6 +131,8 @@ async function main() {
   const tools = createTools(root, {
     beforeWrite: (file) => undo.snapshot(file),
     onOutput: (name, chunk) => renderToolEvent({ phase: "output", name, args: {}, content: chunk }),
+    shellTimeoutMs: config.shellTimeoutMs,
+    shellMaxOutputChars: config.shellMaxOutputChars,
   });
   const disposeTools = async () => {
     await Promise.allSettled(tools.map((tool) => tool.dispose?.()));
@@ -323,7 +325,7 @@ async function main() {
         const summary = result.summary
           ? ` using ${result.summary.mode}:${result.summary.model}`
           : "";
-        console.log(`Compacted ${result.count} old message(s) into .codepilot/session-summary.md${summary}.`);
+        console.log(`Compacted ${result.count} old message(s) into .codepilot/sessions/${agent.getSessionId()}.summary.md${summary}.`);
         continue;
       }
       if (question === "/todo") {

@@ -19,6 +19,8 @@ export type Config = {
   maxVerificationAttempts: number;
   providerMaxRetries: number;
   providerRequestTimeoutMs: number;
+  shellTimeoutMs: number;
+  shellMaxOutputChars: number;
   autoApprove: Risk[];
   permissions: PermissionPolicy;
   runtimeAudit: boolean;
@@ -135,6 +137,18 @@ export async function loadConfig(
       120_000,
       1_000,
       600_000,
+    ),
+    shellTimeoutMs: boundedInteger(
+      overrides.shellTimeoutMs ?? fileConfig.shellTimeoutMs,
+      120_000,
+      100,
+      900_000,
+    ),
+    shellMaxOutputChars: boundedInteger(
+      overrides.shellMaxOutputChars ?? fileConfig.shellMaxOutputChars,
+      1_000_000,
+      1_000,
+      10_000_000,
     ),
     autoApprove: fileConfig.autoApprove ?? ["read"],
     permissions: permissionPolicy(fileConfig.permissions),

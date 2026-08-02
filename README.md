@@ -61,7 +61,7 @@ $env:ANTHROPIC_API_KEY="..."
 npm run dev -- --provider anthropic
 ```
 
-CodePilot also reads `.codepilot.json` for `provider`, `model`, `baseUrl`, `maxSteps`, `maxToolCalls`, `headlessMaxRuntimeMs`, `contextBudgetTokens`, `autoVerify`, `maxVerificationAttempts`, `providerMaxRetries`, `providerRequestTimeoutMs`, `autoApprove`, `permissions`, `runtimeAudit`, `runtimeAuditPath`, `runtimeHookTimeoutMs`, and `protectedPaths`. Keep API keys in environment variables.
+CodePilot also reads `.codepilot.json` for `provider`, `model`, `baseUrl`, `maxSteps`, `maxToolCalls`, `headlessMaxRuntimeMs`, `contextBudgetTokens`, `autoVerify`, `maxVerificationAttempts`, `providerMaxRetries`, `providerRequestTimeoutMs`, `shellTimeoutMs`, `shellMaxOutputChars`, `autoApprove`, `permissions`, `runtimeAudit`, `runtimeAuditPath`, `runtimeHookTimeoutMs`, and `protectedPaths`. Keep API keys in environment variables.
 
 Provider requests retry transient network failures, timeouts, malformed protocol responses, HTTP 408/425/429, and selected 5xx responses with bounded exponential backoff. `Retry-After` is honored up to 30 seconds. Client errors such as HTTP 400 are not retried, and `Ctrl+C` cancels both an active request and a pending retry delay. Defaults can be adjusted per project:
 
@@ -116,7 +116,7 @@ Plan mode blocks write and execute tools. Build mode allows them after approval.
 
 ## Execution Feedback
 
-CodePilot prints each tool lifecycle event (`[tool:start]`, `[tool:completed]`, or `[tool:failed]`). Shell, Git status, and Git diff output is streamed as it arrives, with a 120-second timeout and a 1 MB captured-output limit. Run long-lived development servers such as `npm run dev` in a separate terminal.
+CodePilot prints each tool lifecycle event (`[tool:start]`, `[tool:completed]`, or `[tool:failed]`). Shell, Git status, and Git diff output is streamed as it arrives. Shell results include exit code, duration, timeout, and truncation metadata. Defaults are a 120-second timeout and a 1 MB captured-output limit, configurable with `shellTimeoutMs` and `shellMaxOutputChars`; an individual `shell` call may set `timeout_ms`. Cancellation and timeout terminate the spawned process tree. Run long-lived development servers such as `npm run dev` in a separate terminal.
 
 Press `Ctrl+C` while an agent task is running to cancel the active model request or Shell command. In interactive mode, CodePilot returns to the prompt after cancellation; pressing `Ctrl+C` while idle exits the CLI.
 
@@ -261,10 +261,11 @@ The default budget is `64000` estimated tokens. Configure it in `.codepilot.json
 When history exceeds the budget, CodePilot automatically compacts omitted older messages into:
 
 ```text
-.codepilot/session-summary.md
+.codepilot/sessions/<session-id>.summary.md
 ```
 
 Compaction uses `deepseek-v4-flash` through `DEEPSEEK_API_KEY` to produce structured Markdown summaries. If the key is missing or the API call fails, CodePilot falls back to a local mechanical summary so the session can continue.
+Summaries are isolated per session so resuming or compacting one task cannot leak its compressed context into another. When an older workspace is resumed, the legacy `.codepilot/session-summary.md` is moved once into that resumed session.
 
 Useful commands:
 

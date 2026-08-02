@@ -1,9 +1,23 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { truncateToTokens } from "./token.js";
 import type { Message } from "./types.js";
 
 type Summarize = (messages: Message[]) => Promise<string>;
+const sessionIdPattern = /^[a-zA-Z0-9-]+$/;
+
+function summariesDirectory(root: string) {
+  return path.join(root, ".codepilot", "sessions");
+}
+
+export function sessionSummaryPath(root: string, sessionId: string) {
+  if (!sessionIdPattern.test(sessionId)) throw Error("Invalid session id");
+  return path.join(summariesDirectory(root), `${sessionId}.summary.md`);
+}
+
+function legacySessionSummaryPath(root: string) {
+  return path.join(root, ".codepilot", "session-summary.md");
+}
 
 function messageLine(message: Message) {
   if (message.role === "tool") {
@@ -24,27 +38,45 @@ export function summarizeMessages(messages: Message[]) {
   ].join("\n");
 }
 
-export async function readSessionSummary(root: string) {
+export async function readSessionSummary(root: string, sessionId: string) {
   try {
-    return await readFile(path.join(root, ".codepilot", "session-summary.md"), "utf8");
+    return await readFile(sessionSummaryPath(root, sessionId), "utf8");
   } catch {
     return "";
   }
 }
 
-export async function writeSessionSummary(root: string, summary: string) {
-  const target = path.join(root, ".codepilot", "session-summary.md");
+export async function writeSessionSummary(root: string, sessionId: string, summary: string) {
+  const target = sessionSummaryPath(root, sessionId);
   await mkdir(path.dirname(target), { recursive: true });
   await writeFile(target, summary);
 }
 
+export async function migrateLegacySessionSummary(root: string, sessionId: string) {
+  const target = sessionSummaryPath(root, sessionId);
+  try {
+    await readFile(target, "utf8");
+    return false;
+  } catch {
+    // A session-specific summary does not exist yet.
+  }
+  await mkdir(path.dirname(target), { recursive: true });
+  try {
+    await rename(legacySessionSummaryPath(root), target);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export async function appendSessionSummary(
   root: string,
+  sessionId: string,
   messages: Message[],
   summarize: Summarize = async (items) => summarizeMessages(items),
 ) {
-  const existing = await readSessionSummary(root);
+  const existing = await readSessionSummary(root, sessionId);
   const generated = await summarize(messages);
   const next = `${existing}${existing && !existing.endsWith("\n") ? "\n" : ""}${generated}${generated.endsWith("\n") ? "" : "\n"}`;
-  await writeSessionSummary(root, truncateToTokens(next, 4000));
+  await writeSessionSummary(root, sessionId, truncateToTokens(next, 4000));
 }
