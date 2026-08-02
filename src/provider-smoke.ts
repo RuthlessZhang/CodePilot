@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { RecordingProvider, ReplayProvider } from "./provider-replay.js";
 import { AnthropicProvider, DeepSeekProvider, OpenAIProvider } from "./providers.js";
 import type { ProviderName } from "./model-context.js";
+import { providerDefinition, providerNames } from "./provider-catalog.js";
 import type { Provider, ProviderCompletion, ProviderStreamEvent, ProviderUsage } from "./types.js";
 
 export type LiveSmokeProviderConfig = {
@@ -57,30 +58,6 @@ export type SmokeOptions = {
   reportPath?: string;
   providerFactory?: (config: LiveSmokeProviderConfig, options: { timeoutMs: number }) => Provider;
   onProgress?: (message: string) => void;
-};
-
-const defaults: Record<ProviderName, { model: string; baseUrl: string; keyEnv: string; modelEnv: string; baseUrlEnv: string }> = {
-  openai: {
-    model: "gpt-4.1",
-    baseUrl: "https://api.openai.com/v1",
-    keyEnv: "OPENAI_API_KEY",
-    modelEnv: "OPENAI_MODEL",
-    baseUrlEnv: "OPENAI_BASE_URL",
-  },
-  anthropic: {
-    model: "claude-sonnet-4-5",
-    baseUrl: "https://api.anthropic.com",
-    keyEnv: "ANTHROPIC_API_KEY",
-    modelEnv: "ANTHROPIC_MODEL",
-    baseUrlEnv: "ANTHROPIC_BASE_URL",
-  },
-  deepseek: {
-    model: "deepseek-v4-pro",
-    baseUrl: "https://api.deepseek.com",
-    keyEnv: "DEEPSEEK_API_KEY",
-    modelEnv: "DEEPSEEK_MODEL",
-    baseUrlEnv: "DEEPSEEK_BASE_URL",
-  },
 };
 
 class SmokeAssertionError extends Error {
@@ -297,19 +274,19 @@ export function smokeConfigsFromEnvironment(env: NodeJS.ProcessEnv = process.env
   const requested = env.CODEPILOT_SMOKE_PROVIDERS?.trim().toLowerCase();
   const names = requested && requested !== "all"
     ? [...new Set(requested.split(",").map((value) => value.trim()).filter(Boolean))]
-    : (Object.keys(defaults) as ProviderName[]).filter((name) => requested === "all" || Boolean(env[defaults[name].keyEnv]));
-  const invalid = names.filter((name) => !(name in defaults));
+    : providerNames.filter((name) => requested === "all" || Boolean(env[providerDefinition(name).apiKeyEnv]));
+  const invalid = names.filter((name) => !providerNames.includes(name as ProviderName));
   if (invalid.length) throw Error(`Unknown smoke provider(s): ${invalid.join(", ")}`);
   if (!names.length) throw Error("No provider API keys are configured for live smoke tests");
   return (names as ProviderName[]).map((name) => {
-    const setting = defaults[name];
-    const apiKey = env[setting.keyEnv];
-    if (!apiKey) throw Error(`Missing ${setting.keyEnv} for selected provider ${name}`);
+    const setting = providerDefinition(name);
+    const apiKey = env[setting.apiKeyEnv];
+    if (!apiKey) throw Error(`Missing ${setting.apiKeyEnv} for selected provider ${name}`);
     return {
       name,
       apiKey,
-      model: env[setting.modelEnv] ?? setting.model,
-      baseUrl: env[setting.baseUrlEnv] ?? setting.baseUrl,
+      model: env[setting.modelEnv] ?? setting.defaultModel,
+      baseUrl: env[setting.baseUrlEnv] ?? setting.defaultBaseUrl,
     };
   });
 }

@@ -5,10 +5,11 @@ import { createInterface } from "node:readline/promises";
 import { Agent } from "./agent.js";
 import { runChecks } from "./check.js";
 import { expandFileReferences } from "./context.js";
+import { diagnose, formatDoctorReport } from "./doctor.js";
 import { runHeadless } from "./headless.js";
 import { initProject } from "./init.js";
 import { loadInstructions, loadRelevantRules } from "./instructions.js";
-import { loadConfig } from "./config.js";
+import { assertSafeCredentialPolicy, loadConfig } from "./config.js";
 import { loadRelevantMemory, readMemory, remember } from "./memory.js";
 import { saveProjectIndex, summarizeProjectIndex } from "./project.js";
 import { approval, nonInteractiveApproval } from "./permissions.js";
@@ -70,6 +71,7 @@ function help() {
 /init [--force]       Create or regenerate AGENTS.md
 /index                Build .codepilot/index.json
 /check                Run detected verification commands
+/doctor               Diagnose provider, credentials, dependencies, and project checks
 /remember [topic:] <note> Save a durable topic memory
 /memory [query]       Show the memory index and relevant topics
 /rules [query]        Show all instructions or rules selected for a query
@@ -108,6 +110,13 @@ async function main() {
   if (config.providerRecordPath && config.providerReplayPath) {
     throw Error("Provider record and replay modes are mutually exclusive");
   }
+  if (args.includes("--doctor")) {
+    const report = await diagnose(root, config);
+    console.log(args.includes("--json") ? JSON.stringify(report, null, 2) : formatDoctorReport(report));
+    process.exitCode = report.status === "error" ? 1 : 0;
+    return;
+  }
+  assertSafeCredentialPolicy(config);
   if (!config.providerReplayPath && !config.apiKey) throw Error("Missing API key environment variable");
 
   const providerOptions = {
@@ -348,6 +357,10 @@ async function main() {
       }
       if (question === "/check") {
         console.log(await runChecks(root));
+        continue;
+      }
+      if (question === "/doctor") {
+        console.log(formatDoctorReport(await diagnose(root, config)));
         continue;
       }
       if (question.startsWith("/remember ")) {

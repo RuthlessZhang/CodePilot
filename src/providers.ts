@@ -15,6 +15,7 @@ import {
   requestProviderStream,
   type ProviderRequestOptions,
 } from "./provider-runtime.js";
+import { resolveProviderCapabilities } from "./provider-catalog.js";
 
 export type ProviderOptions = ProviderRequestOptions & {
   apiKey: string;
@@ -401,15 +402,17 @@ export class OpenAIProvider implements Provider {
 
 export class DeepSeekProvider extends OpenAIProvider {
   private deepSeekExtraBody: Record<string, unknown>;
+  private capabilities;
 
   constructor(options: ProviderOptions) {
     const extraBody = { temperature: 0, ...options.extraBody };
     super({ ...options, extraBody });
     this.deepSeekExtraBody = extraBody;
+    this.capabilities = resolveProviderCapabilities("deepseek", options.model);
   }
 
   protected override requestExtraBody(input: ProviderCompletionInput) {
-    return input.toolChoice
+    return input.toolChoice && this.capabilities.thinkingMode === "default" && !this.capabilities.forcedToolChoiceInThinking
       ? { ...this.deepSeekExtraBody, thinking: { type: "disabled" } }
       : this.deepSeekExtraBody;
   }

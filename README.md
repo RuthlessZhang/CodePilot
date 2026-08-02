@@ -63,6 +63,10 @@ npm run dev -- --provider anthropic
 
 CodePilot also reads `.codepilot.json` for `provider`, `model`, `baseUrl`, runtime limits, context and memory budgets, verification, provider retry, Shell limits, permissions, runtime auditing, and protected paths. Keep API keys in environment variables. The context-specific settings are documented under [Context Window Management](#context-window-management).
 
+Provider defaults and adapter behavior are defined in one capability catalog. The catalog distinguishes streaming, Usage, forced tool selection, thinking mode, reasoning continuation, and prompt-cache accounting from model context limits. Run `npm run dev -- --doctor` to inspect the effective provider, model, endpoint, credential source, capabilities, dependencies, verification commands, and context budgets without making an API request or printing credential values. Add `--json` for machine-readable output.
+
+Plaintext `apiKey` values in `.codepilot.json` are rejected. Use the provider environment variable instead; `/doctor` reports the unsafe file setting without echoing its value.
+
 Provider requests retry transient network failures, timeouts, malformed protocol responses, HTTP 408/425/429, and selected 5xx responses with bounded exponential backoff. `Retry-After` is honored up to 30 seconds. Client errors such as HTTP 400 are not retried, and `Ctrl+C` cancels both an active request and a pending retry delay. Defaults can be adjusted per project:
 
 ```json
@@ -127,6 +131,8 @@ When `CODEPILOT_SMOKE_PROVIDERS` is omitted, only providers with a configured AP
 
 The command exits nonzero if any contract fails and writes an atomic JSON report under `.codepilot/runs/`. Reports and progress logs omit API keys, endpoints, prompts, response text, tool arguments, and provider error messages; they retain only model identifiers, timings, token counts, event counts, response hashes, and error class names. Temporary record/replay traces are deleted after validation.
 
+The repository also includes a manually dispatched `DeepSeek Provider Smoke` GitHub workflow. Create a protected GitHub Environment named `provider-smoke`, add `DEEPSEEK_API_KEY` as an environment secret, and run the workflow from the Actions tab when a release or Provider change needs real validation. It never runs on push or pull requests, serializes executions to avoid duplicate spend, and retains only the redacted report artifact for seven days.
+
 `permissions` is a project-local policy layer. It supports exact tool names and `shell:<glob>` command rules; the most specific matching shell rule wins. It takes precedence over the older risk-level `autoApprove` setting:
 
 ```json
@@ -154,6 +160,7 @@ The command exits nonzero if any contract fails and writes an atomic JSON report
 /init [--force]       Create or regenerate AGENTS.md
 /index                Build .codepilot/index.json
 /check                Run detected verification commands
+/doctor               Diagnose provider, credentials, dependencies, and project checks
 /remember [topic:] <note> Save a durable topic memory
 /memory [query]       Show the memory index and relevant topics
 /rules [query]        Show all instructions or rules selected for a query

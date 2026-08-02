@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { resolveModelContextProfile, type ProviderName } from "./model-context.js";
+import { inferProviderFromEnvironment, providerDefinition } from "./provider-catalog.js";
 import type { Risk } from "./types.js";
 
 export type { ProviderName } from "./model-context.js";
@@ -11,6 +12,8 @@ export type Config = {
   provider: ProviderName;
   model: string;
   apiKey?: string;
+  credentialSource?: { kind: "override" | "environment" | "project_config"; name: string };
+  projectApiKeyPresent: boolean;
   baseUrl: string;
   maxSteps: number;
   maxToolCalls: number;
@@ -42,45 +45,6 @@ export type Config = {
   runtimeHookTimeoutMs: number;
   protectedPaths: string[];
 };
-
-const defaults: Record<
-  ProviderName,
-  {
-    model: string;
-    apiKeyEnv: string;
-    modelEnv: string;
-    baseUrlEnv: string;
-    baseUrl: string;
-  }
-> = {
-  openai: {
-    model: "gpt-4.1",
-    apiKeyEnv: "OPENAI_API_KEY",
-    modelEnv: "OPENAI_MODEL",
-    baseUrlEnv: "OPENAI_BASE_URL",
-    baseUrl: "https://api.openai.com/v1",
-  },
-  anthropic: {
-    model: "claude-sonnet-4-5",
-    apiKeyEnv: "ANTHROPIC_API_KEY",
-    modelEnv: "ANTHROPIC_MODEL",
-    baseUrlEnv: "ANTHROPIC_BASE_URL",
-    baseUrl: "https://api.anthropic.com",
-  },
-  deepseek: {
-    model: "deepseek-v4-pro",
-    apiKeyEnv: "DEEPSEEK_API_KEY",
-    modelEnv: "DEEPSEEK_MODEL",
-    baseUrlEnv: "DEEPSEEK_BASE_URL",
-    baseUrl: "https://api.deepseek.com",
-  },
-};
-
-function inferProvider(): ProviderName {
-  if (process.env.DEEPSEEK_API_KEY) return "deepseek";
-  if (process.env.ANTHROPIC_API_KEY) return "anthropic";
-  return "openai";
-}
 
 function permissionPolicy(value: unknown): PermissionPolicy {
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
@@ -121,13 +85,13 @@ export async function loadConfig(
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
 
-  const provider = overrides.provider ?? fileConfig.provider ?? inferProvider();
-  const providerDefaults = defaults[provider];
+  const provider = overrides.provider ?? fileConfig.provider ?? inferProviderFromEnvironment();
+  const providerDefaults = providerDefinition(provider);
   const model =
     overrides.model ??
     fileConfig.model ??
     process.env[providerDefaults.modelEnv] ??
-    providerDefaults.model;
+    providerDefaults.defaultModel;
   const contextProfile = resolveModelContextProfile(provider, model);
   const contextWindowTokens = boundedInteger(
     overrides.contextWindowTokens ?? fileConfig.contextWindowTokens,
@@ -156,14 +120,28 @@ export async function loadConfig(
     throw Error("Provider record and replay modes are mutually exclusive");
   }
 
+  const environmentApiKey = process.env[providerDefaults.apiKeyEnv];
+  const projectApiKey = optionalString(fileConfig.apiKey);
+  const apiKey = overrides.apiKey ?? environmentApiKey ?? projectApiKey;
+  const credentialSource = overrides.apiKey
+    ? { kind: "override" as const, name: "runtime override" }
+    : environmentApiKey
+      ? { kind: "environment" as const, name: providerDefaults.apiKeyEnv }
+      : projectApiKey
+        ? { kind: "project_config" as const, name: ".codepilot.json:apiKey" }
+        : undefined;
+
   return {
     provider,
     model,
-    apiKey: fileConfig.apiKey ?? process.env[providerDefaults.apiKeyEnv],
+    apiKey,
+    ...(credentialSource ? { credentialSource } : {}),
+    projectApiKeyPresent: Boolean(projectApiKey),
     baseUrl:
+      overrides.baseUrl ??
       fileConfig.baseUrl ??
       process.env[providerDefaults.baseUrlEnv] ??
-      providerDefaults.baseUrl,
+      providerDefaults.defaultBaseUrl,
     maxSteps: boundedInteger(overrides.maxSteps ?? fileConfig.maxSteps, 30, 1, 500),
     maxToolCalls: boundedInteger(overrides.maxToolCalls ?? fileConfig.maxToolCalls, 100, 1, 2_000),
     maxRunInputTokens: boundedInteger(
@@ -266,4 +244,10 @@ export async function loadConfig(
     ),
     protectedPaths: stringArray(overrides.protectedPaths ?? fileConfig.protectedPaths),
   };
+}
+
+export function assertSafeCredentialPolicy(config: Config) {
+  if (config.projectApiKeyPresent) {
+    throw Error("Plaintext apiKey in .codepilot.json is not supported. Move it to the provider environment variable, then remove it from the file.");
+  }
 }

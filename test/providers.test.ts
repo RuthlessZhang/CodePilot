@@ -174,7 +174,7 @@ test("maps named tool choice across provider protocols", async () => {
   const chosen = { ...input, toolChoice: { name: "echo_probe" } };
 
   await new OpenAIProvider(options(openAIFetch)).complete(chosen);
-  await new DeepSeekProvider(options(openAIFetch)).complete(chosen);
+  await new DeepSeekProvider(options(openAIFetch, { model: "deepseek-v4-pro" })).complete(chosen);
   await new AnthropicProvider(options(anthropicFetch)).complete(chosen);
 
   assert.deepEqual(bodies[0]?.tool_choice, { type: "function", function: { name: "echo_probe" } });

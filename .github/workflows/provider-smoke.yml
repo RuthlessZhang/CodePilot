@@ -1,0 +1,42 @@
+name: DeepSeek Provider Smoke
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: provider-smoke-deepseek
+  cancel-in-progress: false
+
+jobs:
+  deepseek:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: provider-smoke
+    env:
+      CODEPILOT_LIVE_SMOKE: "1"
+      CODEPILOT_SMOKE_PROVIDERS: deepseek
+      CODEPILOT_SMOKE_REPORT: .codepilot/runs/provider-smoke-deepseek.json
+      DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - name: Require the DeepSeek secret
+        shell: bash
+        run: test -n "$DEEPSEEK_API_KEY"
+      - run: npm run smoke:providers
+      - name: Upload redacted smoke report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: provider-smoke-deepseek
+          path: .codepilot/runs/provider-smoke-deepseek.json
+          if-no-files-found: ignore
+          retention-days: 7

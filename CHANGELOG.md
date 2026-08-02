@@ -15,6 +15,8 @@ All notable changes to CodePilot are documented in this file.
 - Run-level input, output, and total Provider token budgets with per-request output caps, estimated-usage markers, `/usage`, and structured headless failure details.
 - Privacy-safe atomic run checkpoints, per-tool message durability, and side-effect-aware interrupted-session recovery without automatic tool replay.
 - Opt-in live Provider smoke matrix covering text, streaming, normalized usage, forced tool calls, cancellation, and exact offline replay with redacted reports.
+- Central Provider capability catalog plus credential-safe `--doctor` and `/doctor` diagnostics.
+- Manually dispatched, concurrency-locked DeepSeek smoke workflow with protected environment secrets and short-lived redacted artifacts.
 
 ### Changed
 
@@ -23,6 +25,7 @@ All notable changes to CodePilot are documented in this file.
 - Provider retries stop after the first streamed semantic event to prevent duplicated output.
 - Provider requests can require automatic or named tool selection across OpenAI-compatible, DeepSeek, and Anthropic protocols.
 - DeepSeek V4 reasoning content is preserved across tool continuations, while explicitly forced tool selection uses non-thinking mode for API compatibility.
+- Plaintext Provider API keys in `.codepilot.json` are rejected during normal execution.
 
 ## [0.2.0] - 2026-08-02
 
