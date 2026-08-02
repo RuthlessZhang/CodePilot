@@ -197,7 +197,7 @@ function normalizeResult(value: unknown, root: string, key = ""): unknown {
   return Object.fromEntries(Object.entries(record).map(([name, item]) => [name, normalizeResult(item, root, name)]));
 }
 
-function waitForDiagnostics(client: LspClient, uri: string, signal?: AbortSignal, timeoutMs = 8000) {
+function waitForDiagnostics(client: LspClient, uri: string, expectedVersion: number, signal?: AbortSignal, timeoutMs = 8000) {
   const sameDocument = (candidate: unknown) => {
     if (typeof candidate !== "string") return false;
     try {
@@ -228,10 +228,12 @@ function waitForDiagnostics(client: LspClient, uri: string, signal?: AbortSignal
     };
     const abort = () => finish(cancellationError());
     unsubscribe = client.onNotification("textDocument/publishDiagnostics", (params) => {
-      if (!sameDocument((params as { uri?: unknown } | undefined)?.uri)) return;
+      const diagnosticParams = params as { uri?: unknown; version?: unknown } | undefined;
+      if (!sameDocument(diagnosticParams?.uri)) return;
+      if (typeof diagnosticParams?.version === "number" && diagnosticParams.version < expectedVersion) return;
       latest = params;
       if (settleTimer) clearTimeout(settleTimer);
-      settleTimer = setTimeout(finish, 750);
+      settleTimer = setTimeout(finish, 1_500);
     });
     deadline = setTimeout(finish, timeoutMs);
     if (signal?.aborted) abort();
@@ -335,9 +337,11 @@ export async function queryLsp(
   try {
     signal?.throwIfAborted();
     await entry.initialized;
-    const diagnosticsPromise = input.operation === "diagnostics" ? waitForDiagnostics(client, uri, signal) : undefined;
     const version = (entry.documentVersions.get(uri) ?? 0) + 1;
     entry.documentVersions.set(uri, version);
+    const diagnosticsPromise = input.operation === "diagnostics"
+      ? waitForDiagnostics(client, uri, version, signal)
+      : undefined;
     if (version === 1) {
       client.notify("textDocument/didOpen", {
         textDocument: { uri, languageId: server.languageId, version, text: content },

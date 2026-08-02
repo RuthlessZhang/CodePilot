@@ -44,23 +44,23 @@ function waitForProcessClose(child: ChildProcess, timeoutMs: number) {
 async function terminateProcessTree(child: ChildProcess) {
   if (!child.pid) return;
   if (process.platform === "win32") {
-    try {
-      child.kill("SIGBREAK");
-      if (await waitForProcessClose(child, 1_000)) return;
-    } catch {
-      // Fall back to taskkill for processes that do not accept console break.
-    }
-
     await new Promise<void>((resolve) => {
+      let settled = false;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        resolve();
+      };
+      const fallback = () => {
+        try { child.kill(); } catch { /* The process may already have exited. */ }
+        finish();
+      };
       const killer = spawn("taskkill", ["/PID", String(child.pid), "/T", "/F"], {
         windowsHide: true,
         stdio: "ignore",
       });
-      killer.once("error", () => {
-        child.kill();
-        resolve();
-      });
-      killer.once("close", () => resolve());
+      killer.once("error", fallback);
+      killer.once("close", (code) => code === 0 ? finish() : fallback());
     });
     return;
   }
