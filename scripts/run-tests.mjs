@@ -20,7 +20,17 @@ async function testFiles(directory) {
 const files = await testFiles(testRoot);
 if (!files.length) throw Error("No test files found");
 
-const child = spawn(process.execPath, ["--test", "--import", "tsx", ...files], {
+const arguments_ = ["--test", "--test-concurrency=1", "--import", "tsx"];
+if (process.env.GITHUB_ACTIONS === "true") {
+  arguments_.push(
+    "--test-reporter=spec",
+    "--test-reporter-destination=stdout",
+    "--test-reporter=./scripts/github-actions-test-reporter.mjs",
+    "--test-reporter-destination=stdout",
+  );
+}
+
+const child = spawn(process.execPath, [...arguments_, ...files], {
   cwd: repositoryRoot,
   env: process.env,
   stdio: "inherit",
