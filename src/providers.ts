@@ -355,6 +355,11 @@ function openAITools(tools: ToolDef[]) {
   }));
 }
 
+function openAIToolChoice(choice: ProviderCompletionInput["toolChoice"]) {
+  if (!choice || typeof choice === "string") return choice;
+  return { type: "function", function: { name: choice.name } };
+}
+
 export class OpenAIProvider implements Provider {
   constructor(private options: ProviderOptions) {}
 
@@ -368,6 +373,7 @@ export class OpenAIProvider implements Provider {
         max_tokens: input.maxOutputTokens ?? this.options.maxOutputTokens ?? 8_192,
         messages: openAIMessages(input.system, input),
         tools: openAITools(input.tools),
+        ...(input.toolChoice ? { tool_choice: openAIToolChoice(input.toolChoice) } : {}),
         ...(streaming ? { stream: true, stream_options: { include_usage: true } } : {}),
         ...this.options.extraBody,
       }),
@@ -410,6 +416,12 @@ function anthropicMessages(messages: Message[]) {
   return result;
 }
 
+function anthropicToolChoice(choice: ProviderCompletionInput["toolChoice"]) {
+  if (!choice || choice === "auto") return choice ? { type: "auto" } : undefined;
+  if (choice === "required") return { type: "any" };
+  return { type: "tool", name: choice.name };
+}
+
 export class AnthropicProvider implements Provider {
   constructor(private options: ProviderOptions) {}
 
@@ -430,6 +442,7 @@ export class AnthropicProvider implements Provider {
         tools: input.tools.map((tool) => ({
           name: tool.name, description: tool.description, input_schema: tool.inputSchema,
         })),
+        ...(input.toolChoice ? { tool_choice: anthropicToolChoice(input.toolChoice) } : {}),
         ...(streaming ? { stream: true } : {}),
       }),
     } satisfies RequestInit;

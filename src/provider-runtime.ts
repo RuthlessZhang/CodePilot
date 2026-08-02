@@ -225,10 +225,12 @@ export async function requestProviderStream<T, Event>(
           retryAfterMs(response.headers.get("retry-after")),
         );
       }
-      return await parse(response, (event) => {
+      const result = await parse(response, (event) => {
         emitted = true;
         onEvent(event);
       });
+      if (parentSignal?.aborted) throw abortError();
+      return result;
     } catch (error) {
       if (parentSignal?.aborted) throw abortError();
       const failure = scoped.timedOut() ? new ProviderTimeoutError(timeoutMs) : error;

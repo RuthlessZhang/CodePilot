@@ -104,9 +104,26 @@ npm run dev -- --headless `
   "Fix the parser regression"
 ```
 
-The same paths can be configured as `providerRecordPath` or `providerReplayPath` in `.codepilot.json`; the modes are mutually exclusive. Replay is strict and ordered: every packed system prompt, message list, tool definition, and newly recorded per-request output cap must match, otherwise the run fails immediately with a replay mismatch. Stream events, normalized usage, final responses, and provider failures are recorded and reproduced, enabling deterministic rendering, timeout, and outage scenarios. Older response-only traces remain readable.
+The same paths can be configured as `providerRecordPath` or `providerReplayPath` in `.codepilot.json`; the modes are mutually exclusive. Replay is strict and ordered: every packed system prompt, message list, tool definition, forced tool choice, and newly recorded per-request output cap must match, otherwise the run fails immediately with a replay mismatch. Stream events, normalized usage, final responses, and provider failures are recorded and reproduced, enabling deterministic rendering, timeout, and outage scenarios. Older response-only traces remain readable.
 
 Trace files never contain API keys, HTTP headers, system prompts, user messages, or tool definitions—the request side contains hashes and counts only. Successful model output and tool-call arguments are stored in full because replay needs them, so traces may still contain generated code or sensitive output. Keep them under the ignored `.codepilot/replays/` directory and review before sharing.
+
+### Live Provider Smoke Matrix
+
+P2.4 adds an opt-in contract test against the real OpenAI, Anthropic, and DeepSeek APIs. It is disabled unless `CODEPILOT_LIVE_SMOKE=1` is set, because each selected provider makes four billable requests. The matrix checks plain text plus usage, streamed text plus exact offline replay, a streamed forced tool call, and cancellation after streaming begins.
+
+```powershell
+$env:CODEPILOT_LIVE_SMOKE="1"
+$env:CODEPILOT_SMOKE_PROVIDERS="openai,anthropic,deepseek"
+$env:OPENAI_API_KEY="..."
+$env:ANTHROPIC_API_KEY="..."
+$env:DEEPSEEK_API_KEY="..."
+npm run smoke:providers
+```
+
+When `CODEPILOT_SMOKE_PROVIDERS` is omitted, only providers with a configured API key are selected. Use `all` to require all three. Models and endpoints can be overridden with the existing provider variables (`OPENAI_MODEL`, `OPENAI_BASE_URL`, and the equivalent `ANTHROPIC_*` and `DEEPSEEK_*` variables). `CODEPILOT_SMOKE_TIMEOUT_MS` defaults to 60000, `CODEPILOT_SMOKE_MAX_OUTPUT_TOKENS` defaults to 128, and `CODEPILOT_SMOKE_REPORT` can select a workspace-contained report path.
+
+The command exits nonzero if any contract fails and writes an atomic JSON report under `.codepilot/runs/`. Reports and progress logs omit API keys, endpoints, prompts, response text, tool arguments, and provider error messages; they retain only model identifiers, timings, token counts, event counts, response hashes, and error class names. Temporary record/replay traces are deleted after validation.
 
 `permissions` is a project-local policy layer. It supports exact tool names and `shell:<glob>` command rules; the most specific matching shell rule wins. It takes precedence over the older risk-level `autoApprove` setting:
 

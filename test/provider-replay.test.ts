@@ -92,6 +92,18 @@ test("new traces fail closed when the per-request output limit changes", async (
   );
 });
 
+test("new traces fail closed when forced tool choice changes", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "codepilot-provider-tool-choice-mismatch-"));
+  const trace = "provider-tool-choice.jsonl";
+  const delegate: Provider = { async complete() { return { text: "done", toolCalls: [] }; } };
+  await new RecordingProvider(root, trace, delegate).complete(completionInput({ toolChoice: { name: "read_file" } }));
+
+  await assert.rejects(
+    new ReplayProvider(root, trace).complete(completionInput({ toolChoice: "auto" })),
+    /tool choice mismatch/,
+  );
+});
+
 test("records and deterministically replays final provider failures", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "codepilot-provider-error-"));
   const trace = "provider-error.jsonl";

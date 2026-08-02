@@ -13,6 +13,7 @@ type RequestFingerprint = {
   messageCount: number;
   toolCount: number;
   maxOutputTokens?: number;
+  toolChoice?: ProviderCompletionInput["toolChoice"];
 };
 
 type RecordedOutcome =
@@ -64,6 +65,7 @@ export function fingerprintProviderInput(input: ProviderCompletionInput): Reques
     messageCount: input.messages.length,
     toolCount: input.tools.length,
     ...(input.maxOutputTokens !== undefined ? { maxOutputTokens: input.maxOutputTokens } : {}),
+    ...(input.toolChoice !== undefined ? { toolChoice: input.toolChoice } : {}),
   };
 }
 
@@ -210,6 +212,9 @@ export class ReplayProvider implements Provider {
       throw new ProviderReplayMismatchError(
         `Provider replay output limit mismatch at interaction ${this.cursor + 1}: expected ${record.request.maxOutputTokens}, received ${actual.maxOutputTokens ?? "unset"}`,
       );
+    }
+    if (record.request.toolChoice !== undefined && stableJson(actual.toolChoice) !== stableJson(record.request.toolChoice)) {
+      throw new ProviderReplayMismatchError(`Provider replay tool choice mismatch at interaction ${this.cursor + 1}`);
     }
     for (const event of record.events ?? []) input.onEvent?.(structuredClone(event));
     this.cursor++;

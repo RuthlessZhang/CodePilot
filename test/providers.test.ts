@@ -161,6 +161,27 @@ test("applies per-request output budgets across DeepSeek and Anthropic adapters"
   assert.equal(bodies[1]?.max_tokens, 789);
 });
 
+test("maps named tool choice across provider protocols", async () => {
+  const bodies: Array<Record<string, unknown>> = [];
+  const openAIFetch = (async (_url: unknown, init?: RequestInit) => {
+    bodies.push(JSON.parse(String(init?.body)));
+    return json(openAIMessage());
+  }) as typeof fetch;
+  const anthropicFetch = (async (_url: unknown, init?: RequestInit) => {
+    bodies.push(JSON.parse(String(init?.body)));
+    return json({ content: [] });
+  }) as typeof fetch;
+  const chosen = { ...input, toolChoice: { name: "echo_probe" } };
+
+  await new OpenAIProvider(options(openAIFetch)).complete(chosen);
+  await new DeepSeekProvider(options(openAIFetch)).complete(chosen);
+  await new AnthropicProvider(options(anthropicFetch)).complete(chosen);
+
+  assert.deepEqual(bodies[0]?.tool_choice, { type: "function", function: { name: "echo_probe" } });
+  assert.deepEqual(bodies[1]?.tool_choice, { type: "function", function: { name: "echo_probe" } });
+  assert.deepEqual(bodies[2]?.tool_choice, { type: "tool", name: "echo_probe" });
+});
+
 test("streams OpenAI-compatible text, indexed tool arguments, and final usage", async () => {
   let body: Record<string, unknown> = {};
   const fetchImpl = (async (_url: unknown, init?: RequestInit) => {

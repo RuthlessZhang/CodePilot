@@ -31,6 +31,7 @@ export type ProviderCompletionInput = {
   tools: ToolDef[];
   signal?: AbortSignal;
   maxOutputTokens?: number;
+  toolChoice?: "auto" | "required" | { name: string };
   onEvent?: (event: ProviderStreamEvent) => void;
 };
 

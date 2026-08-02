@@ -15,6 +15,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "dev": "tsx src/cli.ts",
+    "smoke:providers": "tsx src/provider-smoke.ts",
     "test": "node --test --import tsx test/**/*.test.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "prepack": "npm run build"

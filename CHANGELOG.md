@@ -14,12 +14,14 @@ All notable changes to CodePilot are documented in this file.
 - Normalized provider token, cache, and reasoning usage in runtime events and headless run metrics.
 - Run-level input, output, and total Provider token budgets with per-request output caps, estimated-usage markers, `/usage`, and structured headless failure details.
 - Privacy-safe atomic run checkpoints, per-tool message durability, and side-effect-aware interrupted-session recovery without automatic tool replay.
+- Opt-in live Provider smoke matrix covering text, streaming, normalized usage, forced tool calls, cancellation, and exact offline replay with redacted reports.
 
 ### Changed
 
 - The default working input cap is now 128K tokens where the selected model window allows it; explicit project budgets are clamped to the usable input window.
 - OpenAI-compatible and Anthropic requests now use the configured maximum output-token limit.
 - Provider retries stop after the first streamed semantic event to prevent duplicated output.
+- Provider requests can require automatic or named tool selection across OpenAI-compatible, DeepSeek, and Anthropic protocols.
 
 ## [0.2.0] - 2026-08-02
 
