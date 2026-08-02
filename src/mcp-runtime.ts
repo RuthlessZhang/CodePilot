@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
-import path from "node:path";
-import { McpClient, type McpToolDefinition } from "./mcp-client.js";
+import { McpClient, type McpToolDefinition, type McpToolsChanged } from "./mcp-client.js";
 import type { McpConfiguration, McpServerConfig } from "./mcp-config.js";
-import { StdioMcpTransport, StreamableHttpMcpTransport } from "./mcp-transport.js";
+import { createMcpTransport } from "./mcp-transport.js";
+import type { ToolRegistry } from "./tool-registry.js";
 import type { Tool } from "./types.js";
 
 export type McpServerStatus = {
@@ -13,36 +13,12 @@ export type McpServerStatus = {
   detail: string;
 };
 
-const inheritedEnvironment = [
-  "PATH", "Path", "PATHEXT", "SystemRoot", "WINDIR", "COMSPEC", "TEMP", "TMP",
-  "TMPDIR", "HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "LANG", "LC_ALL",
-];
-
-function stdioEnvironment(mapping: Record<string, string>, source: NodeJS.ProcessEnv = process.env) {
-  const env: NodeJS.ProcessEnv = {};
-  for (const name of inheritedEnvironment) {
-    if (source[name] !== undefined) env[name] = source[name];
-  }
-  for (const [childName, hostName] of Object.entries(mapping)) {
-    if (source[hostName] !== undefined) env[childName] = source[hostName];
-  }
-  return env;
-}
-
-function transportFor(root: string, server: McpServerConfig) {
-  if (server.transport === "http") {
-    return new StreamableHttpMcpTransport({
-      url: server.url,
-      bearerTokenEnv: server.bearerTokenEnv,
-    });
-  }
-  return new StdioMcpTransport({
-    command: server.command,
-    args: server.args,
-    cwd: server.cwd ? path.resolve(root, server.cwd) : root,
-    env: stdioEnvironment(server.env),
-  });
-}
+type ServerState = {
+  server: McpServerConfig;
+  client: McpClient;
+  tools: Tool[];
+  status: McpServerStatus;
+};
 
 function portableToolName(server: string, tool: string) {
   const normalized = `mcp_${server}_${tool}`.replace(/[^A-Za-z0-9_-]/g, "_");
@@ -105,21 +81,86 @@ function mcpTool(server: McpServerConfig, definition: McpToolDefinition, client:
   };
 }
 
+function definitionChars(tools: readonly Tool[]) {
+  return tools.reduce((total, tool) => total + JSON.stringify(tool.definition).length, 0);
+}
+
+function redactedMessage(error: unknown) {
+  return (error instanceof Error ? error.message : String(error))
+    .replace(/Bearer\s+\S+/gi, "Bearer [REDACTED]")
+    .slice(0, 500);
+}
+
 export class McpRuntime {
+  private disposed = false;
+
   constructor(
-    readonly tools: Tool[],
     readonly statuses: McpServerStatus[],
-    private clients: McpClient[],
+    private readonly states: Map<string, ServerState>,
+    private readonly maxOutputChars: number,
+    private readonly registry?: ToolRegistry,
   ) {}
 
+  get tools() {
+    return [...this.states.values()].flatMap((state) => state.tools);
+  }
+
+  refresh(serverName: string, error: Error | null, definitions: McpToolDefinition[] | null) {
+    if (this.disposed) return;
+    const state = this.states.get(serverName);
+    if (!state) return;
+    if (error || !definitions) {
+      state.status.detail = `${state.tools.length} tool(s) active; refresh failed: ${redactedMessage(error ?? Error("empty tool list"))}`;
+      return;
+    }
+    try {
+      if (definitions.length > 128) throw Error("MCP server exposed more than 128 tools");
+      const replacements = definitions.map((item) => mcpTool(state.server, item, state.client, this.maxOutputChars));
+      const replacementNames = new Set<string>();
+      for (const tool of replacements) {
+        if (replacementNames.has(tool.definition.name)) throw Error(`MCP tool name collision: ${tool.definition.name}`);
+        replacementNames.add(tool.definition.name);
+      }
+
+      const otherTools = [...this.states.values()]
+        .filter((candidate) => candidate !== state)
+        .flatMap((candidate) => candidate.tools);
+      const otherNames = new Set(otherTools.map((tool) => tool.definition.name));
+      const collision = replacements.find((tool) => otherNames.has(tool.definition.name));
+      if (collision) throw Error(`MCP tool name collision: ${collision.definition.name}`);
+      if (otherTools.length + replacements.length > 128) throw Error("Total MCP tool limit of 128 exceeded");
+      if (definitionChars(otherTools) + definitionChars(replacements) > 256_000) {
+        throw Error("Total MCP tool definition limit of 256,000 characters exceeded");
+      }
+
+      this.registry?.replace(state.tools.map((tool) => tool.definition.name), replacements);
+      state.tools = replacements;
+      state.status.toolCount = replacements.length;
+      state.status.detail = `${replacements.length} tool(s) active; list updated dynamically`;
+    } catch (refreshError) {
+      state.status.detail = `${state.tools.length} tool(s) active; rejected tool-list update: ${redactedMessage(refreshError)}`;
+    }
+  }
+
   async dispose() {
-    await Promise.allSettled(this.clients.map((client) => client.close()));
+    if (this.disposed) return;
+    this.disposed = true;
+    if (this.registry) {
+      for (const state of this.states.values()) {
+        this.registry.replace(state.tools.map((tool) => tool.definition.name), []);
+      }
+    }
+    await Promise.allSettled([...this.states.values()].map((state) => state.client.close()));
   }
 }
 
-export async function connectMcpServers(root: string, config: McpConfiguration, signal?: AbortSignal) {
+export async function connectMcpServers(
+  root: string,
+  config: McpConfiguration,
+  signal?: AbortSignal,
+  registry?: ToolRegistry,
+) {
   signal?.throwIfAborted();
-  const tools: Tool[] = [];
   const statuses: McpServerStatus[] = config.issues.map((detail) => ({
     name: "configuration",
     transport: "config",
@@ -127,79 +168,122 @@ export async function connectMcpServers(root: string, config: McpConfiguration, 
     toolCount: 0,
     detail,
   }));
-  const clients: McpClient[] = [];
   const startupClients = new Set<McpClient>();
-  const names = new Set<string>();
-  let definitionChars = 0;
-  let results: Awaited<ReturnType<typeof connectServer>>[];
-  const connectServer = async (server: McpServerConfig) => {
+
+  type Connected = {
+    server: McpServerConfig;
+    client?: McpClient;
+    serverTools?: Tool[];
+    status: McpServerStatus;
+    activate?: (handler: McpToolsChanged) => void;
+  };
+  const connectServer = async (server: McpServerConfig): Promise<Connected> => {
     let client: McpClient | undefined;
+    const queuedChanges: Parameters<McpToolsChanged>[] = [];
+    let activeHandler: McpToolsChanged | undefined;
+    const onChanged: McpToolsChanged = (...change) => {
+      if (activeHandler) activeHandler(...change);
+      else queuedChanges.push(change);
+    };
     try {
-      const activeClient = new McpClient(transportFor(root, server), config.requestTimeoutMs);
+      const activeClient = new McpClient(createMcpTransport(root, server), config.requestTimeoutMs, onChanged);
       client = activeClient;
       startupClients.add(activeClient);
       const definitions = await activeClient.listTools(signal);
-      const serverTools = definitions.map((definition) => mcpTool(server, definition, activeClient, config.toolOutputMaxChars));
-      return { server, client: activeClient, serverTools, status: {
-        name: server.name,
-        transport: server.transport,
-        state: "connected" as const,
-        toolCount: serverTools.length,
-        detail: `${serverTools.length} tool(s) discovered`,
-      } };
+      const serverTools = definitions.map((item) => mcpTool(server, item, activeClient, config.toolOutputMaxChars));
+      const protocol = activeClient.protocolVersion();
+      return {
+        server,
+        client: activeClient,
+        serverTools,
+        status: {
+          name: server.name,
+          transport: server.transport,
+          state: "connected",
+          toolCount: serverTools.length,
+          detail: `${serverTools.length} tool(s) discovered${protocol ? `; protocol ${protocol}` : ""}`,
+        },
+        activate(handler) {
+          activeHandler = handler;
+          for (const change of queuedChanges.splice(0)) handler(...change);
+        },
+      };
     } catch (error) {
       await client?.close();
       if (client) startupClients.delete(client);
       if (signal?.aborted) throw signal.reason instanceof Error
         ? signal.reason
         : new DOMException("MCP startup cancelled", "AbortError");
-      return { server, status: {
-        name: server.name,
-        transport: server.transport,
-        state: "failed" as const,
-        toolCount: 0,
-        detail: (error as Error).message.replace(/Bearer\s+\S+/gi, "Bearer [REDACTED]").slice(0, 500),
-      } };
+      return {
+        server,
+        status: {
+          name: server.name,
+          transport: server.transport,
+          state: "failed",
+          toolCount: 0,
+          detail: redactedMessage(error),
+        },
+      };
     }
   };
+
+  let results: Connected[];
   try {
     results = await Promise.all(config.servers.map(connectServer));
   } catch (error) {
     await Promise.allSettled([...startupClients].map((client) => client.close()));
     throw error;
   }
+
+  const states = new Map<string, ServerState>();
+  const names = new Set<string>();
+  let totalDefinitionChars = 0;
   for (const result of results) {
     if (!result.client || !result.serverTools) {
       statuses.push(result.status);
       continue;
     }
-    const collision = result.serverTools.find((tool) => names.has(tool.definition.name));
-    const serverDefinitionChars = result.serverTools.reduce(
-      (total, tool) => total + JSON.stringify(tool.definition).length,
-      0,
-    );
-    if (collision || tools.length + result.serverTools.length > 128 || definitionChars + serverDefinitionChars > 256_000) {
+    const localNames = new Set<string>();
+    const collision = result.serverTools.find((tool) => {
+      const name = tool.definition.name;
+      if (names.has(name) || localNames.has(name) || (registry?.has(name) ?? false)) return true;
+      localNames.add(name);
+      return false;
+    });
+    const serverDefinitionChars = definitionChars(result.serverTools);
+    const issue = collision
+      ? `MCP tool name collision: ${collision.definition.name}`
+      : [...states.values()].reduce((count, state) => count + state.tools.length, 0) + result.serverTools.length > 128
+        ? "Total MCP tool limit of 128 exceeded"
+        : totalDefinitionChars + serverDefinitionChars > 256_000
+          ? "Total MCP tool definition limit of 256,000 characters exceeded"
+          : undefined;
+    if (issue) {
       await result.client.close();
-      statuses.push({
-        name: result.server.name,
-        transport: result.server.transport,
-        state: "failed",
-        toolCount: 0,
-        detail: collision
-          ? `MCP tool name collision: ${collision.definition.name}`
-          : tools.length + result.serverTools.length > 128
-            ? "Total MCP tool limit of 128 exceeded"
-            : "Total MCP tool definition limit of 256,000 characters exceeded",
-      });
+      statuses.push({ ...result.status, state: "failed", toolCount: 0, detail: issue });
       continue;
     }
-    for (const tool of result.serverTools) names.add(tool.definition.name);
-    definitionChars += serverDefinitionChars;
-    tools.push(...result.serverTools);
-    clients.push(result.client);
+    try {
+      registry?.replace([], result.serverTools);
+    } catch (error) {
+      await result.client.close();
+      statuses.push({ ...result.status, state: "failed", toolCount: 0, detail: redactedMessage(error) });
+      continue;
+    }
+    for (const name of localNames) names.add(name);
+    totalDefinitionChars += serverDefinitionChars;
+    const state = { server: result.server, client: result.client, tools: result.serverTools, status: result.status };
+    states.set(result.server.name, state);
     statuses.push(result.status);
   }
-  return new McpRuntime(tools, statuses, clients);
+
+  const runtime = new McpRuntime(statuses, states, config.toolOutputMaxChars, registry);
+  for (const result of results) {
+    if (states.has(result.server.name)) {
+      result.activate?.((error, tools) => runtime.refresh(result.server.name, error, tools));
+    }
+  }
+  return runtime;
 }
 
 export function formatMcpStatuses(statuses: readonly McpServerStatus[]) {

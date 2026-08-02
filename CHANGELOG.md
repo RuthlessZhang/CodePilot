@@ -19,6 +19,7 @@ All notable changes to CodePilot are documented in this file.
 - Manually dispatched, concurrency-locked DeepSeek smoke workflow with protected environment secrets and short-lived redacted artifacts.
 - User-level Provider credential lifecycle with hidden `auth set`, metadata-only `auth status`, `auth remove`, atomic local storage, and shell-free `apiKeyHelper` support.
 - MCP client core with isolated stdio subprocesses, basic Streamable HTTP, session handling, environment-backed Bearer authentication, tool discovery, and ToolRegistry integration.
+- Official MCP TypeScript SDK v2 integration with automatic modern/legacy protocol negotiation, Streamable HTTP event streams, reconnection, and live tool-list updates.
 
 ### Changed
 
@@ -30,6 +31,7 @@ All notable changes to CodePilot are documented in this file.
 - Plaintext Provider API keys in `.codepilot.json` are rejected during normal execution.
 - Provider calls and DeepSeek context compaction now share one credential precedence chain: runtime override, environment, user helper, then user store.
 - MCP tools share the normal execution permission, cancellation, audit, lifecycle, and context-budget paths; executable server definitions are restricted to user-level configuration.
+- MCP tool-list changes now replace each server's live registry entries atomically; invalid, oversized, or colliding updates preserve the last valid tool set.
 
 ## [0.2.0] - 2026-08-02
 

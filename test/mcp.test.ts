@@ -9,8 +9,9 @@ import path from "node:path";
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { loadMcpConfiguration, validateMcpHttpUrl, type McpConfiguration } from "../src/mcp-config.js";
 import { McpClient } from "../src/mcp-client.js";
-import type { McpTransport } from "../src/mcp-transport.js";
+import type { JSONRPCMessage, Transport } from "@modelcontextprotocol/client";
 import { connectMcpServers, formatMcpStatuses } from "../src/mcp-runtime.js";
+import { ToolRegistry } from "../src/tool-registry.js";
 
 const stdioServerSource = String.raw`
 const readline = require("node:readline");
@@ -18,7 +19,9 @@ const input = readline.createInterface({ input: process.stdin });
 const send = (value) => process.stdout.write(JSON.stringify(value) + "\n");
 input.on("line", (line) => {
   const message = JSON.parse(line);
-  if (message.method === "initialize") {
+  if (message.method === "server/discover") {
+    send({ jsonrpc: "2.0", id: message.id, error: { code: -32601, message: "Method not found" } });
+  } else if (message.method === "initialize") {
     send({ jsonrpc: "2.0", id: message.id, result: {
       protocolVersion: "2025-11-25",
       capabilities: { tools: {} },
@@ -38,6 +41,48 @@ input.on("line", (line) => {
       send({ jsonrpc: "2.0", id: message.id, result: { content: [{ type: "text", text }] } });
     } else if (message.params.name === "slow") {
       setTimeout(() => send({ jsonrpc: "2.0", id: message.id, result: { content: [{ type: "text", text: "late" }] } }), 2000);
+    }
+  }
+});
+`;
+
+const dynamicStdioServerSource = String.raw`
+const readline = require("node:readline");
+const input = readline.createInterface({ input: process.stdin });
+const send = (value) => process.stdout.write(JSON.stringify(value) + "\n");
+let expanded = false;
+let invalid = false;
+input.on("line", (line) => {
+  const message = JSON.parse(line);
+  if (message.method === "server/discover") {
+    send({ jsonrpc: "2.0", id: message.id, error: { code: -32601, message: "Method not found" } });
+  } else if (message.method === "initialize") {
+    send({ jsonrpc: "2.0", id: message.id, result: {
+      protocolVersion: "2025-11-25",
+      capabilities: { tools: { listChanged: true } },
+      serverInfo: { name: "dynamic-mock", version: "1.0.0" }
+    }});
+  } else if (message.method === "tools/list") {
+    const tools = [{ name: "enable", description: "Enable another tool", inputSchema: { type: "object" } }];
+    if (expanded) tools.push({
+      name: "dynamic",
+      description: "Added at runtime",
+      inputSchema: invalid ? { type: "object", description: "x".repeat(65000) } : { type: "object" }
+    });
+    send({ jsonrpc: "2.0", id: message.id, result: { tools } });
+  } else if (message.method === "tools/call") {
+    if (message.params.name === "enable") {
+      expanded = true;
+      send({ jsonrpc: "2.0", id: message.id, result: { content: [{ type: "text", text: "enabled" }] } });
+      send({ jsonrpc: "2.0", method: "notifications/tools/list_changed" });
+    } else if (message.params.name === "dynamic") {
+      if (message.params.arguments.invalidate) {
+        invalid = true;
+        send({ jsonrpc: "2.0", id: message.id, result: { content: [{ type: "text", text: "invalidating" }] } });
+        send({ jsonrpc: "2.0", method: "notifications/tools/list_changed" });
+      } else {
+        send({ jsonrpc: "2.0", id: message.id, result: { content: [{ type: "text", text: "dynamic result" }] } });
+      }
     }
   }
 });
@@ -74,21 +119,27 @@ function configuration(servers: McpConfiguration["servers"], overrides: Partial<
 
 test("marks timed-out MCP tool side effects as unknown and never retries the call", async () => {
   let toolCalls = 0;
-  const transport: McpTransport = {
-    async request(message, signal) {
-      if (message.method === "initialize") {
-        return { jsonrpc: "2.0", id: message.id, result: { protocolVersion: "2025-11-25" } };
-      }
-      if (message.method === "tools/call") {
+  const transport: Transport = {
+    async start() {},
+    async send(message: JSONRPCMessage) {
+      if (!("id" in message) || !("method" in message)) return;
+      if (message.method === "server/discover") {
+        queueMicrotask(() => transport.onmessage?.({
+          jsonrpc: "2.0", id: message.id, error: { code: -32601, message: "Method not found" },
+        }));
+      } else if (message.method === "initialize") {
+        queueMicrotask(() => transport.onmessage?.({
+          jsonrpc: "2.0", id: message.id, result: {
+            protocolVersion: "2025-11-25",
+            capabilities: { tools: {} },
+            serverInfo: { name: "timeout-test", version: "1.0.0" },
+          },
+        }));
+      } else if (message.method === "tools/call") {
         toolCalls++;
-        return await new Promise((_resolve, reject) => {
-          signal.addEventListener("abort", () => reject(signal.reason), { once: true });
-        });
       }
-      return { jsonrpc: "2.0", id: message.id, result: {} };
     },
-    async notify() {},
-    async close() {},
+    async close() { transport.onclose?.(); },
   };
   const client = new McpClient(transport, 20);
   await assert.rejects(
@@ -96,6 +147,50 @@ test("marks timed-out MCP tool side effects as unknown and never retries the cal
     (error: Error) => error.name === "TimeoutError" && /side-effect outcome is unknown/.test(error.message),
   );
   assert.equal(toolCalls, 1);
+});
+
+test("negotiates the modern MCP 2026 protocol through the official client", async () => {
+  const methods: string[] = [];
+  const transport: Transport = {
+    async start() {},
+    async send(message: JSONRPCMessage) {
+      if (!("id" in message) || !("method" in message)) return;
+      methods.push(message.method);
+      if (message.method === "server/discover") {
+        queueMicrotask(() => transport.onmessage?.({
+          jsonrpc: "2.0",
+          id: message.id,
+          result: {
+            resultType: "complete",
+            ttlMs: 0,
+            cacheScope: "private",
+            supportedVersions: ["2026-07-28"],
+            capabilities: { tools: {} },
+          },
+        }));
+      } else if (message.method === "tools/list") {
+        queueMicrotask(() => transport.onmessage?.({
+          jsonrpc: "2.0",
+          id: message.id,
+          result: {
+            resultType: "complete",
+            ttlMs: 0,
+            cacheScope: "private",
+            tools: [{ name: "modern", description: "Modern tool", inputSchema: { type: "object" } }],
+          },
+        }));
+      }
+    },
+    async close() { transport.onclose?.(); },
+  };
+  const client = new McpClient(transport, 1_000);
+  try {
+    assert.deepEqual((await client.listTools()).map((tool) => tool.name), ["modern"]);
+    assert.equal(client.protocolVersion(), "2026-07-28");
+    assert.deepEqual(methods, ["server/discover", "tools/list"]);
+  } finally {
+    await client.close();
+  }
 });
 
 test("MCP status CLI discovers tools without requiring a model credential", async () => {
@@ -160,6 +255,45 @@ test("discovers and calls stdio MCP tools with cancellation, output caps, and ex
   }
 });
 
+test("updates the live ToolRegistry after an MCP tools-list change notification", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "codepilot-mcp-dynamic-"));
+  const script = path.join(root, "dynamic-mcp.cjs");
+  await writeFile(script, dynamicStdioServerSource);
+  const registry = new ToolRegistry();
+  const runtime = await connectMcpServers(root, configuration([{
+    name: "dynamic_server",
+    transport: "stdio",
+    command: process.execPath,
+    args: [script],
+    env: {},
+  }]), undefined, registry);
+  try {
+    assert.equal(registry.has("mcp_dynamic_server_enable"), true);
+    assert.equal(registry.has("mcp_dynamic_server_dynamic"), false);
+    assert.equal(await registry.get("mcp_dynamic_server_enable")!.execute({}), "enabled");
+
+    const deadline = Date.now() + 3_000;
+    while (!registry.has("mcp_dynamic_server_dynamic") && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    assert.equal(registry.has("mcp_dynamic_server_dynamic"), true);
+    assert.equal(await registry.get("mcp_dynamic_server_dynamic")!.execute({}), "dynamic result");
+    assert.match(runtime.statuses[0]!.detail, /list updated dynamically/);
+
+    assert.equal(await registry.get("mcp_dynamic_server_dynamic")!.execute({ invalidate: true }), "invalidating");
+    const rejectionDeadline = Date.now() + 3_000;
+    while (!/rejected tool-list update/.test(runtime.statuses[0]!.detail) && Date.now() < rejectionDeadline) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    assert.match(runtime.statuses[0]!.detail, /rejected tool-list update.*schema exceeded/);
+    assert.equal(await registry.get("mcp_dynamic_server_dynamic")!.execute({}), "dynamic result");
+  } finally {
+    await runtime.dispose();
+  }
+  assert.equal(registry.has("mcp_dynamic_server_enable"), false);
+  assert.equal(registry.has("mcp_dynamic_server_dynamic"), false);
+});
+
 test("connects to a Streamable HTTP MCP server with session and environment-backed Bearer authentication", async () => {
   const requests: Array<{ method: string; authorization?: string; session?: string; protocol?: string }> = [];
   let deleted = false;
@@ -167,6 +301,10 @@ test("connects to a Streamable HTTP MCP server with session and environment-back
     if (request.method === "DELETE") {
       deleted = true;
       response.writeHead(200).end();
+      return;
+    }
+    if (request.method === "GET") {
+      response.writeHead(405, { allow: "POST" }).end();
       return;
     }
     let body = "";
@@ -180,7 +318,12 @@ test("connects to a Streamable HTTP MCP server with session and environment-back
         session: request.headers["mcp-session-id"] as string | undefined,
         protocol: request.headers["mcp-protocol-version"] as string | undefined,
       });
-      if (message.method === "initialize") {
+      if (message.method === "server/discover") {
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(JSON.stringify({
+          jsonrpc: "2.0", id: message.id, error: { code: -32601, message: "Method not found" },
+        }));
+      } else if (message.method === "initialize") {
         response.writeHead(200, { "content-type": "application/json", "mcp-session-id": "session-123" });
         response.end(JSON.stringify({ jsonrpc: "2.0", id: message.id, result: {
           protocolVersion: "2025-11-25",
@@ -191,7 +334,7 @@ test("connects to a Streamable HTTP MCP server with session and environment-back
         response.writeHead(202).end();
       } else if (message.method === "tools/list") {
         response.writeHead(200, { "content-type": "text/event-stream" });
-        response.write(`event: message\ndata: ${JSON.stringify({
+        response.end(`event: message\ndata: ${JSON.stringify({
           jsonrpc: "2.0",
           id: message.id,
           result: { tools: [{ name: "ping", description: "Ping", inputSchema: { type: "object" } }] },
@@ -222,7 +365,7 @@ test("connects to a Streamable HTTP MCP server with session and environment-back
     assert.equal(await runtime.tools[0]!.execute({}), "pong");
     assert.ok(requests.every((request) => request.authorization === "Bearer remote-secret-token"));
     assert.equal(requests.find((request) => request.method === "initialize")?.protocol, undefined);
-    assert.ok(requests.filter((request) => request.method !== "initialize").every((request) =>
+    assert.ok(requests.filter((request) => !["server/discover", "initialize"].includes(request.method)).every((request) =>
       request.session === "session-123" && request.protocol === "2025-11-25",
     ));
     assert.doesNotMatch(JSON.stringify(runtime.statuses), /remote-secret-token/);
@@ -234,6 +377,56 @@ test("connects to a Streamable HTTP MCP server with session and environment-back
     previousToken === undefined
       ? delete process.env.CODEPILOT_TEST_MCP_TOKEN
       : (process.env.CODEPILOT_TEST_MCP_TOKEN = previousToken);
+  }
+});
+
+test("rejects an oversized MCP HTTP response before parsing it", async () => {
+  const server = createServer((request, response) => {
+    if (request.method === "GET") {
+      response.writeHead(405, { allow: "POST" }).end();
+      return;
+    }
+    let body = "";
+    request.setEncoding("utf8");
+    request.on("data", (chunk) => { body += chunk; });
+    request.on("end", () => {
+      const message = JSON.parse(body);
+      if (message.method === "server/discover") {
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(JSON.stringify({ jsonrpc: "2.0", id: message.id, error: { code: -32601, message: "Method not found" } }));
+      } else if (message.method === "initialize") {
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(JSON.stringify({ jsonrpc: "2.0", id: message.id, result: {
+          protocolVersion: "2025-11-25",
+          capabilities: { tools: {} },
+          serverInfo: { name: "oversized", version: "1.0.0" },
+        }}));
+      } else if (message.method === "notifications/initialized") {
+        response.writeHead(202).end();
+      } else if (message.method === "tools/list") {
+        response.writeHead(200, { "content-type": "application/json", "content-length": "5000001" });
+        response.end("{}");
+      }
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const port = (server.address() as AddressInfo).port;
+  const root = await mkdtemp(path.join(os.tmpdir(), "codepilot-mcp-http-limit-"));
+  try {
+    const runtime = await connectMcpServers(root, configuration([{
+      name: "oversized",
+      transport: "http",
+      url: `http://127.0.0.1:${port}/mcp`,
+    }]));
+    try {
+      assert.equal(runtime.statuses[0]?.state, "failed");
+      assert.match(runtime.statuses[0]!.detail, /5,000,000 byte size limit/);
+    } finally {
+      await runtime.dispose();
+    }
+  } finally {
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
   }
 });
 

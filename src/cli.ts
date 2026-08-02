@@ -26,6 +26,7 @@ import {
 } from "./providers.js";
 import { RecordingProvider, ReplayProvider, type ProviderExecutionMode } from "./provider-replay.js";
 import { createTools } from "./tools.js";
+import { ToolRegistry } from "./tool-registry.js";
 import { UndoManager } from "./undo.js";
 import { resolveWorkspace } from "./workspace.js";
 import type { AgentMode, ProviderStreamEvent, ToolEvent } from "./types.js";
@@ -43,12 +44,16 @@ function integerArg(args: string[], flag: string) {
   return parsed;
 }
 
-async function connectMcpWithInterrupt(root: string, configuration: Awaited<ReturnType<typeof loadMcpConfiguration>>) {
+async function connectMcpWithInterrupt(
+  root: string,
+  configuration: Awaited<ReturnType<typeof loadMcpConfiguration>>,
+  registry?: ToolRegistry,
+) {
   const controller = new AbortController();
   const interrupt = () => controller.abort(new DOMException("MCP startup cancelled", "AbortError"));
   process.once("SIGINT", interrupt);
   try {
-    return await connectMcpServers(root, configuration, controller.signal);
+    return await connectMcpServers(root, configuration, controller.signal, registry);
   } finally {
     process.off("SIGINT", interrupt);
   }
@@ -211,28 +216,32 @@ async function main() {
   const runtimeEvents = createConfiguredRuntime(root, config, ({ hook, event, error }) => {
     if (!headless || verbose) console.error(`[hook:error] ${hook} on ${event}: ${error.message}`);
   });
-  const mcpRuntime = await connectMcpWithInterrupt(root, mcpConfiguration);
-  for (const status of mcpRuntime.statuses.filter((entry) => entry.state === "failed")) {
-    console.error(`[mcp] ${status.name}: ${status.detail}`);
-  }
-  const tools = [...createTools(root, {
+  const toolRegistry = new ToolRegistry(createTools(root, {
     beforeWrite: (file) => undo.snapshot(file),
     onOutput: (name, chunk) => renderToolEvent({ phase: "output", name, args: {}, content: chunk }),
     shellTimeoutMs: config.shellTimeoutMs,
     shellMaxOutputChars: config.shellMaxOutputChars,
-  }), ...mcpRuntime.tools];
+  }));
+  let mcpRuntime: Awaited<ReturnType<typeof connectMcpServers>>;
+  try {
+    mcpRuntime = await connectMcpWithInterrupt(root, mcpConfiguration, toolRegistry);
+  } catch (error) {
+    await toolRegistry.dispose();
+    throw error;
+  }
+  for (const status of mcpRuntime.statuses.filter((entry) => entry.state === "failed")) {
+    console.error(`[mcp] ${status.name}: ${status.detail}`);
+  }
   const disposeTools = async () => {
-    await Promise.allSettled([
-      ...tools.map((tool) => tool.dispose?.()),
-      mcpRuntime.dispose(),
-    ]);
+    await mcpRuntime.dispose();
+    await toolRegistry.dispose();
   };
   let agent: Agent;
   try {
     agent = new Agent({
       root,
       provider,
-      tools,
+      tools: toolRegistry,
       approve: headless
         ? nonInteractiveApproval(config.autoApprove, config.permissions)
         : approval(config.autoApprove, root, config.permissions),

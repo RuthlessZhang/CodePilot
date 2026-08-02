@@ -1,6 +1,10 @@
-import type { McpJsonRpcResponse, McpTransport } from "./mcp-transport.js";
-
-export const MCP_PROTOCOL_VERSION = "2025-11-25";
+import {
+  Client,
+  SdkError,
+  SdkErrorCode,
+  type Tool as OfficialMcpTool,
+  type Transport,
+} from "@modelcontextprotocol/client";
 
 export type McpToolDefinition = {
   name: string;
@@ -9,127 +13,138 @@ export type McpToolDefinition = {
   annotations?: Record<string, unknown>;
 };
 
-function record(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+export type McpToolsChanged = (error: Error | null, tools: McpToolDefinition[] | null) => void;
+
+function definition(tool: OfficialMcpTool): McpToolDefinition {
+  return {
+    name: tool.name,
+    ...(tool.description ? { description: tool.description } : {}),
+    ...(tool.inputSchema !== undefined ? { inputSchema: tool.inputSchema } : {}),
+    ...(tool.annotations ? { annotations: tool.annotations as Record<string, unknown> } : {}),
+  };
 }
 
-function rpcResult(response: McpJsonRpcResponse) {
-  if (response.error) throw Error(`MCP server returned JSON-RPC error ${response.error.code}`);
-  return response.result;
+function timeoutWithUnknownSideEffect(error: unknown) {
+  if (!(error instanceof SdkError) || error.code !== SdkErrorCode.RequestTimeout) return error;
+  const timeout = new Error(`${error.message}; remote side-effect outcome is unknown`);
+  timeout.name = "TimeoutError";
+  return timeout;
 }
 
+/**
+ * Small CodePilot adapter around the official MCP TypeScript client. Protocol
+ * negotiation, Streamable HTTP sessions, SSE and list-changed subscriptions
+ * remain owned by the SDK; this adapter retains CodePilot's timeout and safety
+ * semantics.
+ */
 export class McpClient {
-  private nextId = 1;
-  private initializePromise?: Promise<void>;
+  private readonly client: Client;
+  private connectPromise?: Promise<void>;
   private closed = false;
 
-  constructor(private transport: McpTransport, private requestTimeoutMs = 30_000) {}
+  constructor(
+    private readonly transport: Transport,
+    private readonly requestTimeoutMs = 30_000,
+    onToolsChanged?: McpToolsChanged,
+  ) {
+    this.client = new Client(
+      { name: "codepilot", version: "0.2.0" },
+      {
+        versionNegotiation: {
+          mode: "auto",
+          probe: { timeoutMs: Math.min(requestTimeoutMs, 1_000), maxRetries: 0 },
+        },
+        inputRequired: { autoFulfill: false },
+        listMaxPages: 20,
+        ...(onToolsChanged ? {
+          listChanged: {
+            tools: {
+              autoRefresh: true,
+              debounceMs: 100,
+              onChanged: (error, tools) => onToolsChanged(
+                error,
+                tools?.map(definition) ?? null,
+              ),
+            },
+          },
+        } : {}),
+      },
+    );
+  }
 
   async initialize(signal?: AbortSignal) {
-    if (this.initializePromise) return await this.initializePromise;
-    this.initializePromise = this.initializeInternal(signal);
+    if (this.connectPromise) return await this.connectPromise;
+    if (this.closed) throw Error("MCP client is closed");
+    this.connectPromise = this.client.connect(this.transport, {
+      signal,
+      timeout: this.requestTimeoutMs,
+      maxTotalTimeout: this.requestTimeoutMs,
+    });
     try {
-      await this.initializePromise;
+      await this.connectPromise;
     } catch (error) {
-      this.initializePromise = undefined;
+      this.connectPromise = undefined;
       throw error;
     }
   }
 
   async listTools(signal?: AbortSignal) {
     await this.initialize(signal);
-    const tools: McpToolDefinition[] = [];
-    let cursor: string | undefined;
-    for (let page = 0; page < 20; page++) {
-      const result = await this.request("tools/list", cursor ? { cursor } : {}, signal);
-      if (!record(result) || !Array.isArray(result.tools)) throw Error("MCP tools/list returned an invalid result");
-      for (const value of result.tools) {
-        if (!record(value) || typeof value.name !== "string" || !value.name.trim()) {
-          throw Error("MCP tools/list returned an invalid tool definition");
-        }
-        tools.push({
-          name: value.name,
-          ...(typeof value.description === "string" ? { description: value.description } : {}),
-          ...(value.inputSchema !== undefined ? { inputSchema: value.inputSchema } : {}),
-          ...(record(value.annotations) ? { annotations: value.annotations } : {}),
-        });
-      }
-      if (tools.length > 128) throw Error("MCP server exposed more than 128 tools");
-      cursor = typeof result.nextCursor === "string" && result.nextCursor ? result.nextCursor : undefined;
-      if (!cursor) return tools;
-    }
-    throw Error("MCP tools/list exceeded the pagination limit");
+    const result = await this.client.listTools(undefined, {
+      signal,
+      timeout: this.requestTimeoutMs,
+      maxTotalTimeout: this.requestTimeoutMs,
+      cacheMode: "refresh",
+    });
+    if (result.tools.length > 128) throw Error("MCP server exposed more than 128 tools");
+    return result.tools.map(definition);
   }
 
   async callTool(name: string, args: Record<string, unknown>, signal?: AbortSignal) {
     await this.initialize(signal);
     try {
-      return await this.request("tools/call", { name, arguments: args }, signal);
+      return await this.client.callTool(
+        { name, arguments: args },
+        {
+          signal,
+          timeout: this.requestTimeoutMs,
+          maxTotalTimeout: this.requestTimeoutMs,
+        },
+      );
     } catch (error) {
-      if ((error as Error).name === "TimeoutError") {
-        const timeout = new Error(`${(error as Error).message}; remote side-effect outcome is unknown`);
-        timeout.name = "TimeoutError";
-        throw timeout;
+      if (signal?.aborted) {
+        throw signal.reason instanceof Error
+          ? signal.reason
+          : new DOMException("MCP tool call cancelled", "AbortError");
       }
-      throw error;
+      throw timeoutWithUnknownSideEffect(error);
     }
+  }
+
+  protocolVersion() {
+    return this.client.getNegotiatedProtocolVersion();
   }
 
   async close() {
     if (this.closed) return;
     this.closed = true;
-    await this.transport.close();
-  }
-
-  private async initializeInternal(signal?: AbortSignal) {
-    const result = await this.request("initialize", {
-      protocolVersion: MCP_PROTOCOL_VERSION,
-      capabilities: {},
-      clientInfo: { name: "codepilot", version: "0.2.0" },
-    }, signal);
-    if (!record(result) || typeof result.protocolVersion !== "string") {
-      throw Error("MCP initialize returned an invalid result");
-    }
-    this.transport.setProtocolVersion?.(result.protocolVersion);
-    await this.notify("notifications/initialized", {}, signal);
-  }
-
-  private async request(method: string, params: unknown, parentSignal?: AbortSignal) {
-    if (this.closed) throw Error("MCP client is closed");
-    const controller = new AbortController();
-    const onAbort = () => controller.abort(parentSignal?.reason);
-    if (parentSignal?.aborted) controller.abort(parentSignal.reason);
-    else parentSignal?.addEventListener("abort", onAbort, { once: true });
-    const timeoutError = new Error(`MCP request timed out after ${this.requestTimeoutMs}ms`);
-    timeoutError.name = "TimeoutError";
-    const timeout = setTimeout(() => controller.abort(timeoutError), this.requestTimeoutMs);
+    const terminable = this.transport as Transport & { terminateSession?: () => Promise<void> };
     try {
-      const response = await this.transport.request({
-        jsonrpc: "2.0",
-        id: this.nextId++,
-        method,
-        params,
-      }, controller.signal);
-      return rpcResult(response);
+      if (terminable.terminateSession) {
+        let timeout: ReturnType<typeof setTimeout> | undefined;
+        try {
+          await Promise.race([
+            terminable.terminateSession(),
+            new Promise<void>((resolve) => { timeout = setTimeout(resolve, 2_000); }),
+          ]);
+        } finally {
+          if (timeout) clearTimeout(timeout);
+        }
+      }
+    } catch {
+      // Remote session cleanup is best-effort; local resources must still close.
     } finally {
-      clearTimeout(timeout);
-      parentSignal?.removeEventListener("abort", onAbort);
-    }
-  }
-
-  private async notify(method: string, params: unknown, signal?: AbortSignal) {
-    const controller = new AbortController();
-    const onAbort = () => controller.abort(signal?.reason);
-    if (signal?.aborted) controller.abort(signal.reason);
-    else signal?.addEventListener("abort", onAbort, { once: true });
-    const timeoutError = new Error(`MCP notification timed out after ${this.requestTimeoutMs}ms`);
-    timeoutError.name = "TimeoutError";
-    const timeout = setTimeout(() => controller.abort(timeoutError), this.requestTimeoutMs);
-    try {
-      await this.transport.notify({ jsonrpc: "2.0", method, params }, controller.signal);
-    } finally {
-      clearTimeout(timeout);
-      signal?.removeEventListener("abort", onAbort);
+      await this.client.close();
     }
   }
 }

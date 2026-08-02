@@ -33,6 +33,21 @@ test("ToolRegistry provides deterministic registration, lookup, removal, and dis
   assert.equal(disposed, 1);
 });
 
+test("ToolRegistry replaces an owned tool set atomically", () => {
+  const first = tool("first");
+  const second = tool("second");
+  const registry = new ToolRegistry([first, second]);
+
+  assert.throws(() => registry.replace(["first"], [tool("second")]), /already registered/);
+  assert.equal(registry.get("first"), first);
+  assert.equal(registry.get("second"), second);
+
+  const third = tool("third");
+  registry.replace(["first"], [third]);
+  assert.equal(registry.has("first"), false);
+  assert.equal(registry.get("third"), third);
+});
+
 test("RuntimeEventBus emits ordered events and hooks may deny without granting permission", async () => {
   const observed: Array<{ name: RuntimeEventName; sequence: number }> = [];
   const handled: RuntimeEventName[] = [];
