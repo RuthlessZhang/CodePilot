@@ -104,3 +104,24 @@ test("rejects provider traces outside the workspace and malformed recordings", a
   await writeFile(path.join(root, "invalid.jsonl"), "not json\n");
   await assert.rejects(new ReplayProvider(root, "invalid.jsonl").complete(completionInput()), /line 1/);
 });
+
+test("records and replays provider stream events in order", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "codepilot-provider-stream-replay-"));
+  const trace = "provider-stream.jsonl";
+  const delegate: Provider = {
+    async complete(input) {
+      input.onEvent?.({ type: "text_delta", text: "hel" });
+      input.onEvent?.({ type: "text_delta", text: "lo" });
+      input.onEvent?.({ type: "usage", usage: { inputTokens: 2, outputTokens: 1, totalTokens: 3 } });
+      return { text: "hello", toolCalls: [], usage: { inputTokens: 2, outputTokens: 1, totalTokens: 3 } };
+    },
+  };
+  const recordedEvents: unknown[] = [];
+  await new RecordingProvider(root, trace, delegate).complete(completionInput({ onEvent: (event) => recordedEvents.push(event) }));
+  const replayedEvents: unknown[] = [];
+  const result = await new ReplayProvider(root, trace).complete(completionInput({ onEvent: (event) => replayedEvents.push(event) }));
+
+  assert.deepEqual(replayedEvents, recordedEvents);
+  assert.equal(result.text, "hello");
+  assert.equal(result.usage?.totalTokens, 3);
+});

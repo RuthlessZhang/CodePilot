@@ -9,6 +9,12 @@ export type RuntimeEventDataMap = {
     modelDurationMs: number;
     toolDurationMs: number;
     contextCompactions: number;
+    inputTokens: number;
+    outputTokens: number;
+    totalTokens: number;
+    cacheReadInputTokens: number;
+    cacheWriteInputTokens: number;
+    reasoningTokens: number;
     verificationAttempts: number;
     verificationStatus: string;
   };
@@ -26,7 +32,14 @@ export type RuntimeEventDataMap = {
     omittedMessages: number;
   };
   "model.requested": { step: number; messageCount: number; toolCount: number };
-  "model.responded": { step: number; durationMs: number; textLength: number; toolCalls: string[] };
+  "model.responded": {
+    step: number;
+    durationMs: number;
+    textLength: number;
+    toolCalls: string[];
+    usage?: import("./types.js").ProviderUsage;
+    finishReason?: string;
+  };
   "tool.requested": { name: string; risk?: Risk; args: Record<string, unknown> };
   "tool.authorizing": { name: string; risk: Risk; args: Record<string, unknown> };
   "tool.started": { name: string; risk: Risk; args: Record<string, unknown> };

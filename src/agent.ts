@@ -12,7 +12,7 @@ import { createSessionId, getSessionInfo, listSessions, loadSession, saveSession
 import { VerificationController, type VerificationResult } from "./verification.js";
 import { RuntimeEventBus, type RuntimeEventDataMap, type RuntimeEventName } from "./runtime-events.js";
 import { ToolRegistry } from "./tool-registry.js";
-import type { AgentMode, Message, Provider, Risk, Tool, ToolEvent } from "./types.js";
+import type { AgentMode, Message, Provider, ProviderStreamEvent, ProviderUsage, Risk, Tool, ToolEvent } from "./types.js";
 
 export type AgentRunStats = {
   modelSteps: number;
@@ -20,6 +20,12 @@ export type AgentRunStats = {
   modelDurationMs: number;
   toolDurationMs: number;
   contextCompactions: number;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  cacheReadInputTokens: number;
+  cacheWriteInputTokens: number;
+  reasoningTokens: number;
   verificationAttempts: number;
   verificationStatus: "not_run" | "passed" | "failed" | "skipped";
 };
@@ -51,6 +57,7 @@ export type AgentOptions = {
   autoVerify?: boolean;
   maxVerificationAttempts?: number;
   onText?: (text: string) => void;
+  onProviderEvent?: (event: ProviderStreamEvent) => void;
   onToolEvent?: (event: ToolEvent) => void;
   runtimeEvents?: RuntimeEventBus;
 };
@@ -110,6 +117,12 @@ export class Agent {
         modelDurationMs: stats?.modelDurationMs ?? 0,
         toolDurationMs: stats?.toolDurationMs ?? 0,
         contextCompactions: stats?.contextCompactions ?? 0,
+        inputTokens: stats?.inputTokens ?? 0,
+        outputTokens: stats?.outputTokens ?? 0,
+        totalTokens: stats?.totalTokens ?? 0,
+        cacheReadInputTokens: stats?.cacheReadInputTokens ?? 0,
+        cacheWriteInputTokens: stats?.cacheWriteInputTokens ?? 0,
+        reasoningTokens: stats?.reasoningTokens ?? 0,
         verificationAttempts: stats?.verificationAttempts ?? 0,
         verificationStatus: stats?.verificationStatus ?? "not_run",
       });
@@ -200,26 +213,43 @@ export class Agent {
         toolCount: this.tools.list().length,
       }, signal);
       const modelStartedAt = Date.now();
+      const deferStreamText = this.options.mode === "build"
+        && this.options.autoVerify !== false
+        && (verification.hasPendingCodeChanges() || lastVerification?.status === "failed");
+      let streamedText = false;
       const response = await this.options.provider.complete({
         system: packed.system,
         messages: packed.messages.map(withoutEmptyToolCalls),
         tools: this.tools.definitions(),
         signal,
+        ...(this.options.onProviderEvent ? {
+          onEvent: (event: ProviderStreamEvent) => {
+            if (event.type === "text_delta") {
+              if (deferStreamText) return;
+              streamedText = true;
+            }
+            this.options.onProviderEvent?.(event);
+          },
+        } : {}),
       }).finally(() => {
         if (this.activeRunStats) this.activeRunStats.modelDurationMs += Date.now() - modelStartedAt;
       });
+      this.addProviderUsage(response.usage);
       await this.emitRuntime(runId, "model.responded", {
         step: step + 1,
         durationMs: Date.now() - modelStartedAt,
         textLength: response.text.length,
         toolCalls: response.toolCalls.map((call) => call.name),
+        ...(response.usage ? { usage: response.usage } : {}),
+        ...(response.finishReason ? { finishReason: response.finishReason } : {}),
       }, signal);
 
       const deferCompletionText = response.toolCalls.length === 0
         && this.options.mode === "build"
         && this.options.autoVerify !== false
         && (verification.hasPendingCodeChanges() || lastVerification?.status === "failed");
-      if (response.text && !deferCompletionText) this.options.onText?.(response.text);
+      if (streamedText) this.options.onText?.("");
+      else if (response.text && !deferCompletionText) this.options.onText?.(response.text);
       this.messages.push({
         role: "assistant",
         content: response.text,
@@ -469,6 +499,16 @@ export class Agent {
   private emitTool(event: ToolEvent) {
     this.options.onToolEvent?.(event);
   }
+
+  private addProviderUsage(usage?: ProviderUsage) {
+    if (!usage || !this.activeRunStats) return;
+    this.activeRunStats.inputTokens += usage.inputTokens ?? 0;
+    this.activeRunStats.outputTokens += usage.outputTokens ?? 0;
+    this.activeRunStats.totalTokens += usage.totalTokens ?? 0;
+    this.activeRunStats.cacheReadInputTokens += usage.cacheReadInputTokens ?? 0;
+    this.activeRunStats.cacheWriteInputTokens += usage.cacheWriteInputTokens ?? 0;
+    this.activeRunStats.reasoningTokens += usage.reasoningTokens ?? 0;
+  }
 }
 
 function emptyRunStats(): AgentRunStats {
@@ -478,6 +518,12 @@ function emptyRunStats(): AgentRunStats {
     modelDurationMs: 0,
     toolDurationMs: 0,
     contextCompactions: 0,
+    inputTokens: 0,
+    outputTokens: 0,
+    totalTokens: 0,
+    cacheReadInputTokens: 0,
+    cacheWriteInputTokens: 0,
+    reasoningTokens: 0,
     verificationAttempts: 0,
     verificationStatus: "not_run",
   };

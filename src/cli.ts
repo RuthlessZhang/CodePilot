@@ -24,8 +24,7 @@ import { RecordingProvider, ReplayProvider, type ProviderExecutionMode } from ".
 import { createTools } from "./tools.js";
 import { UndoManager } from "./undo.js";
 import { resolveWorkspace } from "./workspace.js";
-import type { AgentMode } from "./types.js";
-import type { ToolEvent } from "./types.js";
+import type { AgentMode, ProviderStreamEvent, ToolEvent } from "./types.js";
 
 function argValue(args: string[], flag: string) {
   const index = args.indexOf(flag);
@@ -147,6 +146,16 @@ async function main() {
     const duration = event.durationMs === undefined ? "" : ` (${event.durationMs}ms)`;
     console.log(`\n[tool:${event.phase}] ${event.name}${duration}${event.content ? `: ${event.content}` : ""}`);
   };
+  const renderProviderEvent = (event: ProviderStreamEvent) => {
+    if (headless && !verbose) return;
+    if (event.type === "text_delta") {
+      process.stdout.write(event.text);
+      return;
+    }
+    if (event.type === "usage" && verbose) {
+      console.error(`\n[provider:usage] ${JSON.stringify(event.usage)}`);
+    }
+  };
   const tools = createTools(root, {
     beforeWrite: (file) => undo.snapshot(file),
     onOutput: (name, chunk) => renderToolEvent({ phase: "output", name, args: {}, content: chunk }),
@@ -180,7 +189,8 @@ async function main() {
     autoVerify: config.autoVerify,
     maxVerificationAttempts: config.maxVerificationAttempts,
     mode,
-    onText: headless ? undefined : (text) => console.log(text),
+    onText: headless && !verbose ? undefined : (text) => console.log(text),
+    onProviderEvent: headless && !verbose ? undefined : renderProviderEvent,
     onToolEvent: renderToolEvent,
     runtimeEvents,
   });

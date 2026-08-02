@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { appendFile, mkdir, readFile } from "node:fs/promises";
 import path from "node:path";
-import type { Provider, ProviderCompletion, ProviderCompletionInput } from "./types.js";
+import type { Provider, ProviderCompletion, ProviderCompletionInput, ProviderStreamEvent } from "./types.js";
 
 export type ProviderExecutionMode = "live" | "record" | "replay";
 
@@ -24,6 +24,7 @@ export type ProviderInteractionRecord = {
   recordedAt: string;
   durationMs: number;
   request: RequestFingerprint;
+  events?: ProviderStreamEvent[];
   outcome: RecordedOutcome;
 };
 
@@ -135,9 +136,18 @@ export class RecordingProvider implements Provider {
     input.signal?.throwIfAborted();
     const sequence = await (this.sequence = this.sequence.then((value) => value + 1));
     const started = Date.now();
+    const events: ProviderStreamEvent[] = [];
     let outcome: RecordedOutcome;
     try {
-      const response = await this.delegate.complete(input);
+      const response = await this.delegate.complete({
+        ...input,
+        ...(input.onEvent ? {
+          onEvent: (event: ProviderStreamEvent) => {
+            events.push(event);
+            input.onEvent?.(event);
+          },
+        } : {}),
+      });
       outcome = { kind: "success", response };
     } catch (error) {
       const failure = asError(error);
@@ -149,6 +159,7 @@ export class RecordingProvider implements Provider {
       recordedAt: new Date().toISOString(),
       durationMs: Date.now() - started,
       request: fingerprintProviderInput(input),
+      ...(events.length ? { events } : {}),
       outcome,
     };
     await this.append(record);
@@ -192,6 +203,7 @@ export class ReplayProvider implements Provider {
         `Provider replay mismatch at interaction ${this.cursor + 1}: expected ${record.request.sha256}, received ${actual.sha256}`,
       );
     }
+    for (const event of record.events ?? []) input.onEvent?.(structuredClone(event));
     this.cursor++;
     if (record.outcome.kind === "error") {
       const error = new Error(record.outcome.error.message);

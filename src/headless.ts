@@ -140,6 +140,12 @@ function emptyRunStats(): AgentRunStats {
     modelDurationMs: 0,
     toolDurationMs: 0,
     contextCompactions: 0,
+    inputTokens: 0,
+    outputTokens: 0,
+    totalTokens: 0,
+    cacheReadInputTokens: 0,
+    cacheWriteInputTokens: 0,
+    reasoningTokens: 0,
     verificationAttempts: 0,
     verificationStatus: "not_run",
   };

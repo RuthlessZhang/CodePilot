@@ -238,6 +238,59 @@ test("automatically verifies code changes and asks the agent to repair failures"
   assert.equal(report.attempts.length, 2);
 });
 
+test("streams provider text once and accumulates provider usage in run stats", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "codepilot-provider-usage-"));
+  const provider: Provider = {
+    async complete(input) {
+      input.onEvent?.({ type: "text_delta", text: "hel" });
+      input.onEvent?.({ type: "text_delta", text: "lo" });
+      input.onEvent?.({ type: "usage", usage: { inputTokens: 9, outputTokens: 2, totalTokens: 11 } });
+      return {
+        text: "hello",
+        toolCalls: [],
+        usage: { inputTokens: 9, outputTokens: 2, totalTokens: 11, cacheReadInputTokens: 4, reasoningTokens: 1 },
+      };
+    },
+  };
+  const deltas: string[] = [];
+  const rendered: string[] = [];
+  const agent = new Agent({
+    root,
+    provider,
+    tools: [],
+    approve: async () => true,
+    maxSteps: 2,
+    contextBudgetTokens: 64_000,
+    mode: "build",
+    autoVerify: false,
+    onProviderEvent: (event) => {
+      if (event.type === "text_delta") deltas.push(event.text);
+    },
+    onText: (text) => rendered.push(text),
+  });
+
+  assert.equal(await agent.run("say hello"), "hello");
+  assert.equal(deltas.join(""), "hello");
+  assert.deepEqual(rendered, [""]);
+  const stats = agent.getLastRunStats();
+  assert.ok(stats && stats.modelDurationMs >= 0);
+  assert.deepEqual({ ...stats, modelDurationMs: 0 }, {
+    modelSteps: 1,
+    toolCalls: 0,
+    modelDurationMs: 0,
+    toolDurationMs: 0,
+    contextCompactions: 0,
+    inputTokens: 9,
+    outputTokens: 2,
+    totalTokens: 11,
+    cacheReadInputTokens: 4,
+    cacheWriteInputTokens: 0,
+    reasoningTokens: 1,
+    verificationAttempts: 0,
+    verificationStatus: "not_run",
+  });
+});
+
 test("does not fail verification for diagnostics that existed before the edit", async (t) => {
   const root = await mkdtemp(path.join(os.tmpdir(), "codepilot-baseline-"));
   t.after(() => closeLspServers(root));

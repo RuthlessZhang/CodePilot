@@ -30,11 +30,28 @@ export type ProviderCompletionInput = {
   messages: Message[];
   tools: ToolDef[];
   signal?: AbortSignal;
+  onEvent?: (event: ProviderStreamEvent) => void;
 };
+
+export type ProviderUsage = {
+  inputTokens?: number;
+  outputTokens?: number;
+  totalTokens?: number;
+  cacheReadInputTokens?: number;
+  cacheWriteInputTokens?: number;
+  reasoningTokens?: number;
+};
+
+export type ProviderStreamEvent =
+  | { type: "text_delta"; text: string }
+  | { type: "tool_call_delta"; index: number; id?: string; name?: string; argumentsDelta?: string }
+  | { type: "usage"; usage: ProviderUsage };
 
 export type ProviderCompletion = {
   text: string;
   toolCalls: ToolCall[];
+  usage?: ProviderUsage;
+  finishReason?: string;
 };
 
 export interface Provider {

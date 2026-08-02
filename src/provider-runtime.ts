@@ -6,6 +6,8 @@ export type ProviderRequestOptions = {
   random?: () => number;
 };
 
+export type ServerSentEvent = { event?: string; data: string };
+
 export class ProviderProtocolError extends Error {
   constructor(message: string) {
     super(message);
@@ -104,6 +106,47 @@ function responseBody(text: string) {
   return compact.length > 4000 ? `${compact.slice(0, 4000)}\n[truncated]` : compact;
 }
 
+function parseServerSentEvent(frame: string): ServerSentEvent | undefined {
+  let event: string | undefined;
+  const data: string[] = [];
+  for (const line of frame.split(/\r?\n/)) {
+    if (!line || line.startsWith(":")) continue;
+    const separator = line.indexOf(":");
+    const field = separator < 0 ? line : line.slice(0, separator);
+    let value = separator < 0 ? "" : line.slice(separator + 1);
+    if (value.startsWith(" ")) value = value.slice(1);
+    if (field === "event") event = value;
+    if (field === "data") data.push(value);
+  }
+  return data.length ? { ...(event ? { event } : {}), data: data.join("\n") } : undefined;
+}
+
+/** Reads SSE frames across arbitrary byte boundaries and ignores comments/unknown fields. */
+export async function readServerSentEvents(
+  response: Response,
+  onEvent: (event: ServerSentEvent) => void,
+) {
+  if (!response.body) throw new ProviderProtocolError("Provider returned an empty event stream");
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  for (;;) {
+    const { done, value } = await reader.read();
+    buffer += decoder.decode(value, { stream: !done });
+    let boundary = buffer.match(/\r?\n\r?\n/);
+    while (boundary?.index !== undefined) {
+      const frame = buffer.slice(0, boundary.index);
+      buffer = buffer.slice(boundary.index + boundary[0].length);
+      const event = parseServerSentEvent(frame);
+      if (event) onEvent(event);
+      boundary = buffer.match(/\r?\n\r?\n/);
+    }
+    if (done) break;
+  }
+  const final = parseServerSentEvent(buffer);
+  if (final) onEvent(final);
+}
+
 export async function requestProvider<T>(
   url: string,
   init: RequestInit,
@@ -141,6 +184,55 @@ export async function requestProvider<T>(
       if (parentSignal?.aborted) throw abortError();
       const failure = scoped.timedOut() ? new ProviderTimeoutError(timeoutMs) : error;
       if (attempt >= maxRetries || !retryable(failure)) throw failure;
+      const serverDelay = failure instanceof ProviderHttpError ? failure.retryAfterMs : undefined;
+      const jitter = 0.8 + Math.max(0, Math.min(1, random())) * 0.4;
+      await wait(serverDelay ?? Math.round(baseDelay * 2 ** attempt * jitter), parentSignal);
+    } finally {
+      scoped.cleanup();
+    }
+  }
+}
+
+/**
+ * Streaming variant of requestProvider. A failed attempt is retried only before
+ * the first semantic event is delivered, preventing duplicated streamed output.
+ */
+export async function requestProviderStream<T, Event>(
+  url: string,
+  init: RequestInit,
+  options: ProviderRequestOptions,
+  parentSignal: AbortSignal | undefined,
+  parse: (response: Response, emit: (event: Event) => void) => Promise<T>,
+  onEvent: (event: Event) => void,
+): Promise<T> {
+  const fetchImpl = options.fetch ?? fetch;
+  const maxRetries = Math.max(0, Math.min(5, options.maxRetries ?? 2));
+  const baseDelay = Math.max(0, options.baseRetryDelayMs ?? 500);
+  const timeoutMs = Math.max(10, options.requestTimeoutMs ?? 120_000);
+  const random = options.random ?? Math.random;
+
+  for (let attempt = 0; ; attempt++) {
+    parentSignal?.throwIfAborted();
+    const scoped = attemptSignal(parentSignal, timeoutMs);
+    let emitted = false;
+    try {
+      const response = await fetchImpl(url, { ...init, signal: scoped.signal });
+      if (!response.ok) {
+        const body = responseBody(await response.text());
+        throw new ProviderHttpError(
+          response.status,
+          `API ${response.status}${body ? `: ${body}` : ""}`,
+          retryAfterMs(response.headers.get("retry-after")),
+        );
+      }
+      return await parse(response, (event) => {
+        emitted = true;
+        onEvent(event);
+      });
+    } catch (error) {
+      if (parentSignal?.aborted) throw abortError();
+      const failure = scoped.timedOut() ? new ProviderTimeoutError(timeoutMs) : error;
+      if (emitted || attempt >= maxRetries || !retryable(failure)) throw failure;
       const serverDelay = failure instanceof ProviderHttpError ? failure.retryAfterMs : undefined;
       const jitter = 0.8 + Math.max(0, Math.min(1, random())) * 0.4;
       await wait(serverDelay ?? Math.round(baseDelay * 2 ** attempt * jitter), parentSignal);

@@ -10,11 +10,14 @@ All notable changes to CodePilot are documented in this file.
 - Layered project memory with a concise index, on-demand topic retrieval, legacy migration, and approved `memory_read`/`memory_write` tools.
 - Credential-safe provider request recording and strict offline replay for deterministic real-model regression tests and failure injection.
 - Headless metrics for model/tool duration, context compactions, verification attempts, and live/record/replay execution provenance.
+- Streaming OpenAI-compatible, DeepSeek, and Anthropic responses with incremental tool-call assembly and deterministic event replay.
+- Normalized provider token, cache, and reasoning usage in runtime events and headless run metrics.
 
 ### Changed
 
 - The default working input cap is now 128K tokens where the selected model window allows it; explicit project budgets are clamped to the usable input window.
 - OpenAI-compatible and Anthropic requests now use the configured maximum output-token limit.
+- Provider retries stop after the first streamed semantic event to prevent duplicated output.
 
 ## [0.2.0] - 2026-08-02
 
