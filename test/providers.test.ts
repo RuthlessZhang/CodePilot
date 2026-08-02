@@ -179,7 +179,29 @@ test("maps named tool choice across provider protocols", async () => {
 
   assert.deepEqual(bodies[0]?.tool_choice, { type: "function", function: { name: "echo_probe" } });
   assert.deepEqual(bodies[1]?.tool_choice, { type: "function", function: { name: "echo_probe" } });
+  assert.deepEqual(bodies[1]?.thinking, { type: "disabled" });
   assert.deepEqual(bodies[2]?.tool_choice, { type: "tool", name: "echo_probe" });
+});
+
+test("preserves DeepSeek reasoning content for a tool continuation", async () => {
+  let body: { messages?: Array<{ reasoning_content?: string; content?: unknown }> } = {};
+  const fetchImpl = (async (_url: unknown, init?: RequestInit) => {
+    body = JSON.parse(String(init?.body));
+    return json({
+      choices: [{ message: { content: "done" }, finish_reason: "stop" }],
+      usage: { prompt_tokens: 10, completion_tokens: 2, total_tokens: 12 },
+    });
+  }) as typeof fetch;
+  await new DeepSeekProvider(options(fetchImpl)).complete({
+    ...input,
+    messages: [
+      { role: "assistant", content: "", reasoningContent: "private reasoning", toolCalls: [{ id: "call-1", name: "read_file", arguments: { path: "README.md" } }] },
+      { role: "tool", content: "contents", toolCallId: "call-1", name: "read_file" },
+    ],
+  });
+
+  assert.equal(body.messages[1]?.reasoning_content, "private reasoning");
+  assert.equal(body.messages[1]?.content, null);
 });
 
 test("streams OpenAI-compatible text, indexed tool arguments, and final usage", async () => {
@@ -187,7 +209,8 @@ test("streams OpenAI-compatible text, indexed tool arguments, and final usage", 
   const fetchImpl = (async (_url: unknown, init?: RequestInit) => {
     body = JSON.parse(String(init?.body));
     return eventStream([
-      'data: {"choices":[{"index":0,"delta":{"content":"hel"},"finish_reason":null}]}\r',
+      'data: {"choices":[{"index":0,"delta":{"reasoning_content":"inspect first"},"finish_reason":null}]}\r',
+      '\n\r\ndata: {"choices":[{"index":0,"delta":{"content":"hel"},"finish_reason":null}]}\r',
       '\n\r\ndata: {"choices":[{"index":0,"delta":{"content":"lo","tool_calls":[{"index":0,"id":"call-1","function":{"name":"read_","arguments":"{\\"path\\":"}}]},"finish_reason":null}]}\n\n',
       'data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"name":"file","arguments":"\\"README.md\\"}"}}]},"finish_reason":"tool_calls"}]}\n\n',
       'data: {"choices":[],"usage":{"prompt_tokens":12,"completion_tokens":4,"total_tokens":16,"prompt_tokens_details":{"cached_tokens":7},"completion_tokens_details":{"reasoning_tokens":2}}}\n\n',
@@ -201,6 +224,7 @@ test("streams OpenAI-compatible text, indexed tool arguments, and final usage", 
   assert.equal(body.stream, true);
   assert.deepEqual(body.stream_options, { include_usage: true });
   assert.equal(result.text, "hello");
+  assert.equal(result.reasoningContent, "inspect first");
   assert.equal(result.finishReason, "tool_calls");
   assert.deepEqual(result.toolCalls, [{ id: "call-1", name: "read_file", arguments: { path: "README.md" } }]);
   assert.deepEqual(result.usage, {

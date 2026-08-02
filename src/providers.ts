@@ -136,6 +136,9 @@ function parseOpenAIResponse(data: unknown): ProviderCompletion {
   if (!Array.isArray(rawCalls)) throw new ProviderProtocolError("Provider response has invalid tool_calls");
   const finishReason = typeof choice.finish_reason === "string" ? choice.finish_reason : undefined;
   const usage = openAIUsage(root.usage);
+  const reasoningContent = typeof message.reasoning_content === "string" && message.reasoning_content
+    ? message.reasoning_content
+    : undefined;
   return {
     text: textContent(message.content),
     toolCalls: rawCalls.map((value) => {
@@ -148,6 +151,7 @@ function parseOpenAIResponse(data: unknown): ProviderCompletion {
         arguments: toolArguments(fn.arguments, name),
       };
     }),
+    ...(reasoningContent ? { reasoningContent } : {}),
     ...(usage ? { usage } : {}),
     ...(finishReason ? { finishReason } : {}),
   };
@@ -192,6 +196,7 @@ function jsonEvent(data: string) {
 
 async function parseOpenAIStream(response: Response, emit: (event: ProviderStreamEvent) => void): Promise<ProviderCompletion> {
   const text: string[] = [];
+  const reasoning: string[] = [];
   const calls = new Map<number, { id: string; name: string; arguments: string }>();
   let usage: ProviderUsage | undefined;
   let finishReason: string | undefined;
@@ -217,6 +222,9 @@ async function parseOpenAIStream(response: Response, emit: (event: ProviderStrea
       if (typeof choice.finish_reason === "string") finishReason = choice.finish_reason;
       const delta = optionalRecord(choice.delta);
       if (!delta) continue;
+      if (typeof delta.reasoning_content === "string" && delta.reasoning_content) {
+        reasoning.push(delta.reasoning_content);
+      }
       if (typeof delta.content === "string" && delta.content) {
         text.push(delta.content);
         emit({ type: "text_delta", text: delta.content });
@@ -256,6 +264,7 @@ async function parseOpenAIStream(response: Response, emit: (event: ProviderStrea
   return {
     text: text.join(""),
     toolCalls,
+    ...(reasoning.length ? { reasoningContent: reasoning.join("") } : {}),
     ...(usage ? { usage } : {}),
     ...(finishReason ? { finishReason } : {}),
   };
@@ -335,6 +344,7 @@ function openAIMessages(system: string, input: ProviderCompletionInput) {
       messages.push({
         role: message.role,
         content: message.content || null,
+        ...(message.role === "assistant" && message.reasoningContent ? { reasoning_content: message.reasoningContent } : {}),
         ...(message.toolCalls?.length ? {
           tool_calls: message.toolCalls.map((call) => ({
             id: call.id,
@@ -363,6 +373,10 @@ function openAIToolChoice(choice: ProviderCompletionInput["toolChoice"]) {
 export class OpenAIProvider implements Provider {
   constructor(private options: ProviderOptions) {}
 
+  protected requestExtraBody(_input: ProviderCompletionInput) {
+    return this.options.extraBody ?? {};
+  }
+
   async complete(input: ProviderCompletionInput) {
     const streaming = Boolean(input.onEvent);
     const request = {
@@ -375,7 +389,7 @@ export class OpenAIProvider implements Provider {
         tools: openAITools(input.tools),
         ...(input.toolChoice ? { tool_choice: openAIToolChoice(input.toolChoice) } : {}),
         ...(streaming ? { stream: true, stream_options: { include_usage: true } } : {}),
-        ...this.options.extraBody,
+        ...this.requestExtraBody(input),
       }),
     } satisfies RequestInit;
     const url = `${this.options.baseUrl.replace(/\/$/, "")}/chat/completions`;
@@ -386,8 +400,18 @@ export class OpenAIProvider implements Provider {
 }
 
 export class DeepSeekProvider extends OpenAIProvider {
+  private deepSeekExtraBody: Record<string, unknown>;
+
   constructor(options: ProviderOptions) {
-    super({ ...options, extraBody: { temperature: 0, ...options.extraBody } });
+    const extraBody = { temperature: 0, ...options.extraBody };
+    super({ ...options, extraBody });
+    this.deepSeekExtraBody = extraBody;
+  }
+
+  protected override requestExtraBody(input: ProviderCompletionInput) {
+    return input.toolChoice
+      ? { ...this.deepSeekExtraBody, thinking: { type: "disabled" } }
+      : this.deepSeekExtraBody;
   }
 }
 

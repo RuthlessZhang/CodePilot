@@ -74,6 +74,8 @@ Provider requests retry transient network failures, timeouts, malformed protocol
 
 Interactive OpenAI-compatible, DeepSeek, and Anthropic requests stream text to the terminal while incrementally assembling tool calls. CodePilot normalizes provider usage into input, output, total, cache-read, cache-write, and reasoning-token counters. Non-streaming headless calls still collect usage when the provider returns it. A stream may be retried before its first semantic event; after text or a tool-call delta has been emitted, failures are surfaced without retrying so output cannot be duplicated.
 
+DeepSeek V4 reasoning content is retained internally and returned with assistant tool-call messages so thinking-mode tool continuations remain protocol-correct. It is never rendered as normal assistant text. DeepSeek rejects forced `tool_choice` while thinking mode is enabled, so CodePilot disables thinking only for requests that explicitly force tool selection; ordinary agent requests keep the model's default thinking mode.
+
 ### Run Token Budgets
 
 Every CLI run has independent input, output, and total Provider token limits. Before a request, CodePilot checks the packed input estimate and lowers that request's output limit to the remaining run allowance. If a Provider omits usage, the same transparent `characters / 4` estimator used by context packing is used for accounting and `usageEstimatedSteps` is incremented. A final answer may complete at the limit, but a tool call is never executed when there is no budget left for its continuation.

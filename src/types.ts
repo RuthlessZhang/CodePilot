@@ -8,7 +8,7 @@ export type ToolCall = {
 };
 
 export type Message =
-  | { role: "user" | "assistant"; content: string; toolCalls?: ToolCall[] }
+  | { role: "user" | "assistant"; content: string; toolCalls?: ToolCall[]; reasoningContent?: string }
   | { role: "tool"; content: string; toolCallId: string; name: string };
 
 export type ToolDef = {
@@ -52,6 +52,7 @@ export type ProviderStreamEvent =
 export type ProviderCompletion = {
   text: string;
   toolCalls: ToolCall[];
+  reasoningContent?: string;
   usage?: ProviderUsage;
   finishReason?: string;
 };

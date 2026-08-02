@@ -157,7 +157,7 @@ function baseInput(marker: string, maxOutputTokens: number) {
 
 async function textScenario(provider: Provider, maxOutputTokens: number) {
   const marker = "TEXT";
-  const response = await provider.complete(baseInput(marker, Math.min(32, maxOutputTokens)));
+  const response = await provider.complete(baseInput(marker, maxOutputTokens));
   assertSmoke(response.text.includes(`CODEPILOT_SMOKE_OK_${marker}`), "Provider text response omitted the smoke marker");
   return { usage: validateUsage(response.usage), responseSha256: hashText(response.text) };
 }
@@ -168,7 +168,7 @@ async function streamReplayScenario(provider: Provider, maxOutputTokens: number)
     const trace = "provider.jsonl";
     const recordedEvents: ProviderStreamEvent[] = [];
     const input = {
-      ...baseInput("STREAM", Math.min(32, maxOutputTokens)),
+      ...baseInput("STREAM", maxOutputTokens),
       onEvent: (event: ProviderStreamEvent) => recordedEvents.push(event),
     };
     const response = await new RecordingProvider(temporaryRoot, trace, provider).complete(input);
@@ -209,7 +209,7 @@ async function toolScenario(provider: Provider, maxOutputTokens: number) {
       },
     }],
     toolChoice: { name: "echo_probe" },
-    maxOutputTokens: Math.min(64, maxOutputTokens),
+    maxOutputTokens,
     onEvent: (event) => events.push(event),
   });
   const call = response.toolCalls.find((candidate) => candidate.name === "echo_probe");

@@ -6,10 +6,10 @@ import { mkdtemp, readFile } from "node:fs/promises";
 import { runProviderSmoke, smokeConfigsFromEnvironment } from "../src/provider-smoke.js";
 import type { Provider } from "../src/types.js";
 
-function fakeProvider(onCall?: () => void): Provider {
+function fakeProvider(onCall?: (maxOutputTokens: number | undefined) => void): Provider {
   return {
     async complete(input) {
-      onCall?.();
+      onCall?.(input.maxOutputTokens);
       if (input.toolChoice) {
         input.onEvent?.({ type: "tool_call_delta", index: 0, id: "tool-1", name: "echo_probe" });
         input.onEvent?.({ type: "tool_call_delta", index: 0, argumentsDelta: '{"value":"CODEPILOT_TOOL_OK"}' });
@@ -43,15 +43,17 @@ function fakeProvider(onCall?: () => void): Provider {
 test("runs the complete provider smoke contract without persisting secrets or response text", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "codepilot-provider-smoke-test-"));
   let calls = 0;
+  const outputLimits: Array<number | undefined> = [];
   const report = await runProviderSmoke({
     root,
     configs: [{ name: "openai", model: "fake-model", baseUrl: "https://secret.internal/v1", apiKey: "super-secret-key" }],
     reportPath: "reports/smoke.json",
-    providerFactory: () => fakeProvider(() => { calls++; }),
+    providerFactory: () => fakeProvider((limit) => { calls++; outputLimits.push(limit); }),
   });
 
   assert.equal(report.status, "passed");
   assert.equal(calls, 4);
+  assert.deepEqual(outputLimits, [128, 128, 128, 128]);
   assert.deepEqual(report.providers[0]?.scenarios.map((scenario) => scenario.status), ["passed", "passed", "passed", "passed"]);
   assert.equal(report.providers[0]?.scenarios[3]?.cancellationObserved, true);
   const persisted = await readFile(path.join(root, "reports", "smoke.json"), "utf8");

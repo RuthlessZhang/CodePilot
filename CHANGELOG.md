@@ -22,6 +22,7 @@ All notable changes to CodePilot are documented in this file.
 - OpenAI-compatible and Anthropic requests now use the configured maximum output-token limit.
 - Provider retries stop after the first streamed semantic event to prevent duplicated output.
 - Provider requests can require automatic or named tool selection across OpenAI-compatible, DeepSeek, and Anthropic protocols.
+- DeepSeek V4 reasoning content is preserved across tool continuations, while explicitly forced tool selection uses non-thinking mode for API compatibility.
 
 ## [0.2.0] - 2026-08-02
 

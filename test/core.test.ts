@@ -458,7 +458,7 @@ test("does not resend empty tool call arrays from prior turns", async () => {
   const provider: Provider = {
     async complete(input) {
       received = input.messages;
-      return { text: "done", toolCalls: [] };
+      return { text: "done", toolCalls: [], reasoningContent: "private reasoning" };
     },
   };
   const agent = new Agent({
@@ -474,6 +474,7 @@ test("does not resend empty tool call arrays from prior turns", async () => {
   await agent.run("first task");
   await agent.run("second task");
   assert.ok(!received.some((message) => message.role === "assistant" && message.toolCalls?.length === 0));
+  assert.ok(received.some((message) => message.role === "assistant" && message.reasoningContent === "private reasoning"));
 });
 
 test("cancels an active provider request", async () => {
@@ -520,7 +521,7 @@ test("sanitizes malformed persisted session messages on load", async () => {
   await writeFile(
     path.join(root, ".codepilot", "session.json"),
     JSON.stringify([
-      { role: "assistant", content: "old", toolCalls: [] },
+      { role: "assistant", content: "old", toolCalls: [], reasoningContent: "preserve me" },
       { role: "unexpected", content: "discard" },
     ]),
   );
@@ -542,7 +543,7 @@ test("sanitizes malformed persisted session messages on load", async () => {
   });
   await agent.load();
   await agent.run("new task");
-  assert.deepEqual(received[0], { role: "assistant", content: "old" });
+  assert.deepEqual(received[0], { role: "assistant", content: "old", reasoningContent: "preserve me" });
 });
 
 test("saves indexed sessions and resumes an exact session id", async () => {

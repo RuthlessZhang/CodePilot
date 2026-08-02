@@ -304,6 +304,7 @@ export class Agent {
         role: "assistant",
         content: response.text,
         ...(response.toolCalls.length ? { toolCalls: response.toolCalls } : {}),
+        ...(response.reasoningContent ? { reasoningContent: response.reasoningContent } : {}),
       });
       await this.save();
 
@@ -727,15 +728,23 @@ function sanitizeMessages(value: unknown): Message[] {
     if (!item || typeof item !== "object") return [];
     const message = item as Record<string, unknown>;
     if ((message.role === "user" || message.role === "assistant") && typeof message.content === "string") {
+      const reasoningContent = message.role === "assistant" && typeof message.reasoningContent === "string" && message.reasoningContent
+        ? message.reasoningContent
+        : undefined;
       if (!Array.isArray(message.toolCalls) || !message.toolCalls.length) {
-        return [{ role: message.role, content: message.content }];
+        return [{ role: message.role, content: message.content, ...(reasoningContent ? { reasoningContent } : {}) }];
       }
       const calls = message.toolCalls.filter((call): call is { id: string; name: string; arguments: Record<string, unknown> } => {
         if (!call || typeof call !== "object") return false;
         const record = call as Record<string, unknown>;
         return typeof record.id === "string" && typeof record.name === "string" && !!record.arguments && typeof record.arguments === "object";
       });
-      return [{ role: message.role, content: message.content, ...(calls.length ? { toolCalls: calls } : {}) }];
+      return [{
+        role: message.role,
+        content: message.content,
+        ...(calls.length ? { toolCalls: calls } : {}),
+        ...(reasoningContent ? { reasoningContent } : {}),
+      }];
     }
     if (
       message.role === "tool" &&
@@ -762,7 +771,11 @@ function pendingToolCalls(messages: Message[]) {
 
 function withoutEmptyToolCalls(message: Message): Message {
   if (message.role !== "assistant" || message.toolCalls?.length) return message;
-  return { role: "assistant", content: message.content };
+  return {
+    role: "assistant",
+    content: message.content,
+    ...(message.reasoningContent ? { reasoningContent: message.reasoningContent } : {}),
+  };
 }
 
 function memoryOptions(options: AgentOptions): MemoryLoadOptions {
