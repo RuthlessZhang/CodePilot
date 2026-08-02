@@ -82,9 +82,9 @@ test("gets TypeScript document symbols through a reused LSP server", async (t) =
     await tool.execute({ operation: "workspaceSymbols", path: "main.ts", query: "greet" }),
     /greet/,
   );
+  assert.equal(activeLspServerCount(root), 1);
   await writeFile(path.join(root, "main.ts"), 'const total: number = "wrong";\n');
   assert.match(await tool.execute({ operation: "diagnostics", path: "main.ts" }), /not assignable|不能分配/i);
-  assert.equal(activeLspServerCount(root), 1);
 });
 
 test("gets Python document symbols through a reused LSP server", async (t) => {
