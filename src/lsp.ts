@@ -2,6 +2,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import ts from "typescript";
 
 export type LspOperation = "documentSymbols" | "workspaceSymbols" | "definition" | "references" | "hover" | "diagnostics";
 
@@ -202,6 +203,54 @@ function hasDiagnostics(value: unknown) {
     && ((value as { diagnostics: unknown[] }).diagnostics.length > 0);
 }
 
+function typescriptCompilerDiagnostics(root: string, target: string) {
+  const configPath = ts.findConfigFile(root, ts.sys.fileExists, "tsconfig.json");
+  let options: ts.CompilerOptions = {
+    allowJs: true,
+    checkJs: true,
+    module: ts.ModuleKind.NodeNext,
+    moduleResolution: ts.ModuleResolutionKind.NodeNext,
+    noEmit: true,
+    strict: true,
+    target: ts.ScriptTarget.ES2022,
+  };
+  if (configPath) {
+    const loaded = ts.readConfigFile(configPath, ts.sys.readFile);
+    if (!loaded.error) {
+      options = {
+        ...ts.parseJsonConfigFileContent(loaded.config, ts.sys, path.dirname(configPath)).options,
+        noEmit: true,
+      };
+    }
+  }
+
+  const absoluteTarget = path.resolve(target);
+  const comparableTarget = process.platform === "win32" ? absoluteTarget.toLowerCase() : absoluteTarget;
+  const diagnostics = ts.getPreEmitDiagnostics(ts.createProgram([absoluteTarget], options))
+    .filter((diagnostic) => {
+      if (!diagnostic.file) return false;
+      const diagnosticPath = path.resolve(diagnostic.file.fileName);
+      return (process.platform === "win32" ? diagnosticPath.toLowerCase() : diagnosticPath) === comparableTarget;
+    })
+    .map((diagnostic) => {
+      const file = diagnostic.file!;
+      const startOffset = diagnostic.start ?? 0;
+      const endOffset = startOffset + (diagnostic.length ?? 0);
+      const start = file.getLineAndCharacterOfPosition(startOffset);
+      const end = file.getLineAndCharacterOfPosition(endOffset);
+      return {
+        range: { start, end },
+        severity: diagnostic.category === ts.DiagnosticCategory.Error ? 1
+          : diagnostic.category === ts.DiagnosticCategory.Warning ? 2
+            : diagnostic.category === ts.DiagnosticCategory.Suggestion ? 4 : 3,
+        code: diagnostic.code,
+        source: "typescript",
+        message: ts.flattenDiagnosticMessageText(diagnostic.messageText, "\n"),
+      };
+    });
+  return { uri: pathToFileURL(absoluteTarget).href, diagnostics };
+}
+
 function waitForDiagnostics(client: LspClient, uri: string, expectedVersion: number, signal?: AbortSignal, timeoutMs = 8000) {
   const sameDocument = (candidate: unknown) => {
     if (typeof candidate !== "string") return false;
@@ -381,6 +430,9 @@ export async function queryLsp(
           contentChanges: [{ text: content }],
         });
         result = await retry;
+      }
+      if (!hasDiagnostics(result) && [".ts", ".tsx", ".js", ".jsx"].includes(path.extname(target).toLowerCase())) {
+        result = typescriptCompilerDiagnostics(root, target);
       }
     } else if (input.operation === "workspaceSymbols") {
       result = await client.request("workspace/symbol", { query: input.query ?? "" });
