@@ -3,6 +3,7 @@ import { spawn } from "node:child_process";
 import { mkdir, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { AgentBudgetError, type AgentRunStats } from "./agent.js";
+import type { ProviderExecutionMode } from "./provider-replay.js";
 
 export type HeadlessStatus = "completed" | "failed" | "incomplete" | "budget_exceeded" | "timeout" | "cancelled";
 
@@ -33,6 +34,12 @@ export type HeadlessResult = {
   error?: string;
   budgets: { maxRuntimeMs: number; maxSteps: number; maxToolCalls: number };
   usage: AgentRunStats;
+  provider: {
+    name: string;
+    model: string;
+    mode: ProviderExecutionMode;
+    tracePath?: string;
+  };
   artifact: {
     resultPath: string;
     patchAvailable: boolean;
@@ -54,6 +61,7 @@ type RunHeadlessOptions = {
   resultPath?: string;
   patchPath?: string;
   capturePatch?: (root: string) => Promise<PatchCapture>;
+  provider?: HeadlessResult["provider"];
 };
 
 function normalize(value: string) {
@@ -125,6 +133,18 @@ function statusFrom(stats: AgentRunStats): HeadlessStatus {
   return "completed";
 }
 
+function emptyRunStats(): AgentRunStats {
+  return {
+    modelSteps: 0,
+    toolCalls: 0,
+    modelDurationMs: 0,
+    toolDurationMs: 0,
+    contextCompactions: 0,
+    verificationAttempts: 0,
+    verificationStatus: "not_run",
+  };
+}
+
 function exitCode(status: HeadlessStatus) {
   return { completed: 0, failed: 1, budget_exceeded: 2, incomplete: 3, timeout: 124, cancelled: 130 }[status];
 }
@@ -146,7 +166,7 @@ export async function runHeadless(options: RunHeadlessOptions): Promise<Headless
 
   try {
     response = await options.agent.run(options.agentPrompt ?? options.task);
-    status = statusFrom(options.agent.getLastRunStats() ?? { modelSteps: 0, toolCalls: 0, verificationStatus: "not_run" });
+    status = statusFrom(options.agent.getLastRunStats() ?? emptyRunStats());
   } catch (error) {
     errorMessage = (error as Error).message;
     if (timedOut) status = "timeout";
@@ -161,7 +181,7 @@ export async function runHeadless(options: RunHeadlessOptions): Promise<Headless
   if (status === "completed" && !patch.available) status = "incomplete";
   if (patch.available) await atomicWrite(patchTarget, patch.patch);
   const completed = Date.now();
-  const stats = options.agent.getLastRunStats() ?? { modelSteps: 0, toolCalls: 0, verificationStatus: "not_run" };
+  const stats = options.agent.getLastRunStats() ?? emptyRunStats();
   const result: HeadlessResult = {
     version: 1,
     runId,
@@ -176,6 +196,7 @@ export async function runHeadless(options: RunHeadlessOptions): Promise<Headless
     ...(errorMessage ? { error: errorMessage } : {}),
     budgets: { maxRuntimeMs: options.maxRuntimeMs, maxSteps: options.maxSteps, maxToolCalls: options.maxToolCalls },
     usage: stats,
+    provider: options.provider ?? { name: "unknown", model: "unknown", mode: "live" },
     artifact: {
       resultPath: normalize(path.relative(options.root, resultTarget)),
       patchAvailable: patch.available,

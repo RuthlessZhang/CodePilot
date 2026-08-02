@@ -17,6 +17,10 @@ import type { AgentMode, Message, Provider, Risk, Tool, ToolEvent } from "./type
 export type AgentRunStats = {
   modelSteps: number;
   toolCalls: number;
+  modelDurationMs: number;
+  toolDurationMs: number;
+  contextCompactions: number;
+  verificationAttempts: number;
   verificationStatus: "not_run" | "passed" | "failed" | "skipped";
 };
 
@@ -94,7 +98,7 @@ export class Agent {
     const runId = randomUUID();
     const startingMessageCount = this.messages.length;
     this.activeController = controller;
-    this.activeRunStats = { modelSteps: 0, toolCalls: 0, verificationStatus: "not_run" };
+    this.activeRunStats = emptyRunStats();
     try {
       await this.emitRuntime(runId, "run.started", { prompt, mode: this.options.mode }, controller.signal);
       const response = await this.runWithSignal(prompt, controller.signal, runId);
@@ -103,6 +107,10 @@ export class Agent {
         responseLength: response.length,
         modelSteps: stats?.modelSteps ?? 0,
         toolCalls: stats?.toolCalls ?? 0,
+        modelDurationMs: stats?.modelDurationMs ?? 0,
+        toolDurationMs: stats?.toolDurationMs ?? 0,
+        contextCompactions: stats?.contextCompactions ?? 0,
+        verificationAttempts: stats?.verificationAttempts ?? 0,
         verificationStatus: stats?.verificationStatus ?? "not_run",
       });
       return response;
@@ -156,6 +164,7 @@ export class Agent {
         const oldMessages = this.messages.slice(0, packed.report.omittedMessages);
         const summary = await summarizeWithDeepSeekFlash(oldMessages);
         this.lastSummary = summary;
+        if (this.activeRunStats) this.activeRunStats.contextCompactions++;
         await appendSessionSummary(
           this.options.root,
           this.sessionId,
@@ -190,14 +199,18 @@ export class Agent {
         messageCount: packed.messages.length,
         toolCount: this.tools.list().length,
       }, signal);
+      const modelStartedAt = Date.now();
       const response = await this.options.provider.complete({
         system: packed.system,
         messages: packed.messages.map(withoutEmptyToolCalls),
         tools: this.tools.definitions(),
         signal,
+      }).finally(() => {
+        if (this.activeRunStats) this.activeRunStats.modelDurationMs += Date.now() - modelStartedAt;
       });
       await this.emitRuntime(runId, "model.responded", {
         step: step + 1,
+        durationMs: Date.now() - modelStartedAt,
         textLength: response.text.length,
         toolCalls: response.toolCalls.map((call) => call.name),
       }, signal);
@@ -218,7 +231,10 @@ export class Agent {
           const verificationAttempt = verificationAttempts + 1;
           await this.emitRuntime(runId, "verification.started", { attempt: verificationAttempt }, signal);
           lastVerification = await verification.verify(signal);
-          if (this.activeRunStats) this.activeRunStats.verificationStatus = lastVerification.status;
+          if (this.activeRunStats) {
+            this.activeRunStats.verificationAttempts++;
+            this.activeRunStats.verificationStatus = lastVerification.status;
+          }
           verificationAttempts++;
           await this.emitVerification(runId, verificationAttempt, lastVerification, signal);
           if (lastVerification.status === "failed") {
@@ -320,6 +336,7 @@ export class Agent {
               }
               verification.recordToolSuccess(call.name, call.arguments, content);
               const durationMs = Date.now() - startedAt;
+              if (this.activeRunStats) this.activeRunStats.toolDurationMs += durationMs;
               if (tool.risk === "write") {
                 await this.emitRuntime(runId, "edit.applied", {
                   tool: call.name,
@@ -336,6 +353,7 @@ export class Agent {
             } catch (error) {
               content = `Error: ${(error as Error).message}`;
               const durationMs = Date.now() - startedAt;
+              if (this.activeRunStats) this.activeRunStats.toolDurationMs += durationMs;
               this.emitTool({ phase: "failed", name: call.name, args: call.arguments, content, durationMs });
               await this.emitRuntime(runId, "tool.failed", {
                 name: call.name,
@@ -451,6 +469,18 @@ export class Agent {
   private emitTool(event: ToolEvent) {
     this.options.onToolEvent?.(event);
   }
+}
+
+function emptyRunStats(): AgentRunStats {
+  return {
+    modelSteps: 0,
+    toolCalls: 0,
+    modelDurationMs: 0,
+    toolDurationMs: 0,
+    contextCompactions: 0,
+    verificationAttempts: 0,
+    verificationStatus: "not_run",
+  };
 }
 
 function changedFilesFromTool(name: string, args: Record<string, unknown>, output: string) {

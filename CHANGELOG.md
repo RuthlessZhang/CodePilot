@@ -8,6 +8,8 @@ All notable changes to CodePilot are documented in this file.
 
 - Model-aware context profiles with explicit output and safety reserves, tool-schema accounting, named system-section reporting, and age-aware tool-result pruning.
 - Layered project memory with a concise index, on-demand topic retrieval, legacy migration, and approved `memory_read`/`memory_write` tools.
+- Credential-safe provider request recording and strict offline replay for deterministic real-model regression tests and failure injection.
+- Headless metrics for model/tool duration, context compactions, verification attempts, and live/record/replay execution provenance.
 
 ### Changed
 

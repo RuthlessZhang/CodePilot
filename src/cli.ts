@@ -20,6 +20,7 @@ import {
   DeepSeekProvider,
   OpenAIProvider,
 } from "./providers.js";
+import { RecordingProvider, ReplayProvider, type ProviderExecutionMode } from "./provider-replay.js";
 import { createTools } from "./tools.js";
 import { UndoManager } from "./undo.js";
 import { resolveWorkspace } from "./workspace.js";
@@ -42,7 +43,7 @@ function integerArg(args: string[], flag: string) {
 function promptFromArgs(args: string[]) {
   const flagsWithValues = new Set([
     "--provider", "--model", "--mode", "--cwd", "--session", "--max-runtime-ms", "--max-steps",
-    "--max-tool-calls", "--output", "--patch-output",
+    "--max-tool-calls", "--output", "--patch-output", "--record-provider", "--replay-provider",
   ]);
   return args
     .filter((arg, index) => !arg.startsWith("--") && !flagsWithValues.has(args[index - 1]))
@@ -96,9 +97,14 @@ async function main() {
     maxSteps: integerArg(args, "--max-steps"),
     maxToolCalls: integerArg(args, "--max-tool-calls"),
     headlessMaxRuntimeMs: integerArg(args, "--max-runtime-ms"),
+    providerRecordPath: argValue(args, "--record-provider"),
+    providerReplayPath: argValue(args, "--replay-provider"),
   });
 
-  if (!config.apiKey) throw Error("Missing API key environment variable");
+  if (config.providerRecordPath && config.providerReplayPath) {
+    throw Error("Provider record and replay modes are mutually exclusive");
+  }
+  if (!config.providerReplayPath && !config.apiKey) throw Error("Missing API key environment variable");
 
   const providerOptions = {
     apiKey: config.apiKey,
@@ -108,12 +114,24 @@ async function main() {
     maxRetries: config.providerMaxRetries,
     requestTimeoutMs: config.providerRequestTimeoutMs,
   };
-  const provider =
-    config.provider === "anthropic"
-      ? new AnthropicProvider(providerOptions)
+  const liveProvider = config.providerReplayPath
+    ? undefined
+    : config.provider === "anthropic"
+      ? new AnthropicProvider({ ...providerOptions, apiKey: config.apiKey! })
       : config.provider === "deepseek"
-        ? new DeepSeekProvider(providerOptions)
-        : new OpenAIProvider(providerOptions);
+        ? new DeepSeekProvider({ ...providerOptions, apiKey: config.apiKey! })
+        : new OpenAIProvider({ ...providerOptions, apiKey: config.apiKey! });
+  const providerMode: ProviderExecutionMode = config.providerReplayPath
+    ? "replay"
+    : config.providerRecordPath
+      ? "record"
+      : "live";
+  const providerTracePath = config.providerReplayPath ?? config.providerRecordPath;
+  const provider = config.providerReplayPath
+    ? new ReplayProvider(root, config.providerReplayPath)
+    : config.providerRecordPath
+      ? new RecordingProvider(root, config.providerRecordPath, liveProvider!)
+      : liveProvider!;
 
   const undo = new UndoManager(root);
   const renderToolEvent = (event: ToolEvent) => {
@@ -228,6 +246,12 @@ async function main() {
           maxToolCalls: config.maxToolCalls,
           resultPath: argValue(args, "--output"),
           patchPath: argValue(args, "--patch-output"),
+          provider: {
+            name: config.provider,
+            model: config.model,
+            mode: providerMode,
+            ...(providerTracePath ? { tracePath: providerTracePath } : {}),
+          },
         });
         console.log(JSON.stringify(result));
         process.exitCode = result.exitCode;

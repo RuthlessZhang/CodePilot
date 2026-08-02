@@ -25,13 +25,20 @@ export type ToolEvent = {
   durationMs?: number;
 };
 
+export type ProviderCompletionInput = {
+  system: string;
+  messages: Message[];
+  tools: ToolDef[];
+  signal?: AbortSignal;
+};
+
+export type ProviderCompletion = {
+  text: string;
+  toolCalls: ToolCall[];
+};
+
 export interface Provider {
-  complete(input: {
-    system: string;
-    messages: Message[];
-    tools: ToolDef[];
-    signal?: AbortSignal;
-  }): Promise<{ text: string; toolCalls: ToolCall[] }>;
+  complete(input: ProviderCompletionInput): Promise<ProviderCompletion>;
 }
 
 export type ToolExecutionContext = {

@@ -72,6 +72,26 @@ Provider requests retry transient network failures, timeouts, malformed protocol
 }
 ```
 
+### Provider Record and Replay
+
+Record final provider interactions from a real run, then replay them offline without an API key:
+
+```powershell
+npm run dev -- --headless `
+  --provider deepseek `
+  --record-provider .codepilot/replays/fix-parser.jsonl `
+  "Fix the parser regression"
+
+npm run dev -- --headless `
+  --provider deepseek `
+  --replay-provider .codepilot/replays/fix-parser.jsonl `
+  "Fix the parser regression"
+```
+
+The same paths can be configured as `providerRecordPath` or `providerReplayPath` in `.codepilot.json`; the modes are mutually exclusive. Replay is strict and ordered: every packed system prompt, message list, and tool definition must produce the same SHA-256 request fingerprint, otherwise the run fails immediately with a replay mismatch. Final provider failures are recorded and reproduced as failures, enabling deterministic timeout and outage scenarios.
+
+Trace files never contain API keys, HTTP headers, system prompts, user messages, or tool definitions—the request side contains hashes and counts only. Successful model output and tool-call arguments are stored in full because replay needs them, so traces may still contain generated code or sensitive output. Keep them under the ignored `.codepilot/replays/` directory and review before sharing.
+
 `permissions` is a project-local policy layer. It supports exact tool names and `shell:<glob>` command rules; the most specific matching shell rule wins. It takes precedence over the older risk-level `autoApprove` setting:
 
 ```json
@@ -158,7 +178,7 @@ node C:\Users\18355\Documents\Codex\CodePilot\dist\cli.js `
   "Fix the reported parser regression"
 ```
 
-Stable statuses and exit codes are `completed` (0), `failed` (1), `budget_exceeded` (2), `incomplete` (3), `timeout` (124), and `cancelled` (130). The result records task timing, session ID, model steps, tool calls, verification status, artifact paths, patch size, and SHA-256.
+Stable statuses and exit codes are `completed` (0), `failed` (1), `budget_exceeded` (2), `incomplete` (3), `timeout` (124), and `cancelled` (130). The result records task timing, session ID, model steps, tool calls, model/tool duration, context compactions, verification attempts and status, provider execution mode and trace path, artifact paths, patch size, and SHA-256.
 
 Headless permissions fail closed: an `ask` decision is denied instead of waiting for stdin. Configure explicit `allow` rules or `autoApprove` only inside a trusted isolated workspace. Final patch capture includes tracked changes and up to 100 untracked files, excludes `.codepilot/**`, and does not modify the Git index.
 

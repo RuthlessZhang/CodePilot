@@ -28,6 +28,8 @@ export type Config = {
   maxVerificationAttempts: number;
   providerMaxRetries: number;
   providerRequestTimeoutMs: number;
+  providerRecordPath?: string;
+  providerReplayPath?: string;
   shellTimeoutMs: number;
   shellMaxOutputChars: number;
   autoApprove: Risk[];
@@ -99,6 +101,10 @@ function stringArray(value: unknown) {
     : [];
 }
 
+function optionalString(value: unknown) {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
 export async function loadConfig(
   cwd: string,
   overrides: Partial<Config> = {},
@@ -141,6 +147,11 @@ export async function loadConfig(
   const maximumInputBudget = Math.max(2_000, contextWindowTokens - maxOutputTokens - contextSafetyMarginTokens);
   const runtimeAudit = overrides.runtimeAudit ?? fileConfig.runtimeAudit;
   const runtimeAuditPath = overrides.runtimeAuditPath ?? fileConfig.runtimeAuditPath;
+  const providerRecordPath = optionalString(overrides.providerRecordPath ?? fileConfig.providerRecordPath);
+  const providerReplayPath = optionalString(overrides.providerReplayPath ?? fileConfig.providerReplayPath);
+  if (providerRecordPath && providerReplayPath) {
+    throw Error("Provider record and replay modes are mutually exclusive");
+  }
 
   return {
     provider,
@@ -206,6 +217,8 @@ export async function loadConfig(
       1_000,
       600_000,
     ),
+    providerRecordPath,
+    providerReplayPath,
     shellTimeoutMs: boundedInteger(
       overrides.shellTimeoutMs ?? fileConfig.shellTimeoutMs,
       120_000,

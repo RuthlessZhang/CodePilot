@@ -2,7 +2,16 @@ import type { AgentMode, Risk } from "./types.js";
 
 export type RuntimeEventDataMap = {
   "run.started": { prompt: string; mode: AgentMode };
-  "run.completed": { responseLength: number; modelSteps: number; toolCalls: number; verificationStatus: string };
+  "run.completed": {
+    responseLength: number;
+    modelSteps: number;
+    toolCalls: number;
+    modelDurationMs: number;
+    toolDurationMs: number;
+    contextCompactions: number;
+    verificationAttempts: number;
+    verificationStatus: string;
+  };
   "run.failed": { error: string; errorName: string };
   "run.cancelled": { reason: string };
   "context.prepared": {
@@ -17,7 +26,7 @@ export type RuntimeEventDataMap = {
     omittedMessages: number;
   };
   "model.requested": { step: number; messageCount: number; toolCount: number };
-  "model.responded": { step: number; textLength: number; toolCalls: string[] };
+  "model.responded": { step: number; durationMs: number; textLength: number; toolCalls: string[] };
   "tool.requested": { name: string; risk?: Risk; args: Record<string, unknown> };
   "tool.authorizing": { name: string; risk: Risk; args: Record<string, unknown> };
   "tool.started": { name: string; risk: Risk; args: Record<string, unknown> };

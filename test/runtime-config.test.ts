@@ -91,6 +91,7 @@ test("loads validated runtime audit and protected path configuration", async () 
     runtimeAudit: false,
     runtimeAuditPath: ".codepilot/custom-audit.jsonl",
     runtimeHookTimeoutMs: 1,
+    providerRecordPath: ".codepilot/replays/latest.jsonl",
     protectedPaths: ["generated/**", "", "generated/**", 42],
   }));
 
@@ -98,5 +99,16 @@ test("loads validated runtime audit and protected path configuration", async () 
   assert.equal(config.runtimeAudit, false);
   assert.equal(config.runtimeAuditPath, ".codepilot/custom-audit.jsonl");
   assert.equal(config.runtimeHookTimeoutMs, 10);
+  assert.equal(config.providerRecordPath, ".codepilot/replays/latest.jsonl");
+  assert.equal(config.providerReplayPath, undefined);
   assert.deepEqual(config.protectedPaths, ["generated/**"]);
+});
+
+test("rejects simultaneous provider record and replay modes", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "codepilot-config-replay-"));
+  await writeFile(path.join(root, ".codepilot.json"), JSON.stringify({
+    providerRecordPath: ".codepilot/replays/record.jsonl",
+    providerReplayPath: ".codepilot/replays/replay.jsonl",
+  }));
+  await assert.rejects(loadConfig(root), /mutually exclusive/);
 });

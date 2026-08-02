@@ -18,7 +18,15 @@ class FakeAgent {
 
   constructor(
     private implementation: () => Promise<string>,
-    private stats: AgentRunStats = { modelSteps: 1, toolCalls: 0, verificationStatus: "passed" },
+    private stats: AgentRunStats = {
+      modelSteps: 1,
+      toolCalls: 0,
+      modelDurationMs: 0,
+      toolDurationMs: 0,
+      contextCompactions: 0,
+      verificationAttempts: 0,
+      verificationStatus: "passed",
+    },
   ) {}
 
   run() {
@@ -57,6 +65,8 @@ test("writes a machine-readable headless result and patch artifact", async () =>
   assert.equal(result.status, "completed");
   assert.equal(result.exitCode, 0);
   assert.equal(result.artifact.patchAvailable, true);
+  assert.equal(result.provider.mode, "live");
+  assert.equal(result.usage.modelDurationMs, 0);
   assert.match(await readFile(path.join(root, "artifacts", "result.json"), "utf8"), /"status": "completed"/);
   assert.equal(await readFile(path.join(root, "artifacts", "result.patch"), "utf8"), "diff --git a/a b/a\n");
 });
@@ -66,7 +76,15 @@ test("maps skipped verification and budget failures to stable headless exit code
   const incomplete = await runHeadless({
     root,
     task: "edit",
-    agent: new FakeAgent(async () => "checks unavailable", { modelSteps: 1, toolCalls: 1, verificationStatus: "skipped" }),
+    agent: new FakeAgent(async () => "checks unavailable", {
+      modelSteps: 1,
+      toolCalls: 1,
+      modelDurationMs: 12,
+      toolDurationMs: 5,
+      contextCompactions: 0,
+      verificationAttempts: 1,
+      verificationStatus: "skipped",
+    }),
     maxRuntimeMs: 1000,
     maxSteps: 3,
     maxToolCalls: 3,
