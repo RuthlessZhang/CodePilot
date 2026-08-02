@@ -11,8 +11,11 @@ import { selectWorkspaceContext } from "./workspace-context.js";
 import { createSessionId, getSessionInfo, listSessions, loadSession, saveSession } from "./sessions.js";
 import { VerificationController, type VerificationResult } from "./verification.js";
 import { RuntimeEventBus, type RuntimeEventDataMap, type RuntimeEventName } from "./runtime-events.js";
+import { estimateTokens } from "./token.js";
 import { ToolRegistry } from "./tool-registry.js";
-import type { AgentMode, Message, Provider, ProviderStreamEvent, ProviderUsage, Risk, Tool, ToolEvent } from "./types.js";
+import type { AgentMode, Message, Provider, ProviderCompletion, ProviderStreamEvent, ProviderUsage, Risk, Tool, ToolEvent } from "./types.js";
+
+export type AgentBudgetKind = "steps" | "tool_calls" | "input_tokens" | "output_tokens" | "total_tokens";
 
 export type AgentRunStats = {
   modelSteps: number;
@@ -26,13 +29,21 @@ export type AgentRunStats = {
   cacheReadInputTokens: number;
   cacheWriteInputTokens: number;
   reasoningTokens: number;
+  usageEstimatedSteps: number;
   verificationAttempts: number;
   verificationStatus: "not_run" | "passed" | "failed" | "skipped";
 };
 
 export class AgentBudgetError extends Error {
-  constructor(readonly budget: "steps" | "tool_calls", readonly limit: number) {
-    super(`Maximum ${budget === "steps" ? "model steps" : "tool calls"} reached (${limit})`);
+  constructor(readonly budget: AgentBudgetKind, readonly limit: number) {
+    const labels: Record<AgentBudgetKind, string> = {
+      steps: "model steps",
+      tool_calls: "tool calls",
+      input_tokens: "run input tokens",
+      output_tokens: "run output tokens",
+      total_tokens: "run total tokens",
+    };
+    super(`Maximum ${labels[budget]} reached (${limit})`);
     this.name = "AgentBudgetError";
   }
 }
@@ -44,6 +55,9 @@ export type AgentOptions = {
   approve: (risk: Risk, name: string, args: Record<string, unknown>) => Promise<boolean>;
   maxSteps: number;
   maxToolCalls?: number;
+  maxRunInputTokens?: number;
+  maxRunOutputTokens?: number;
+  maxRunTotalTokens?: number;
   contextBudgetTokens: number;
   contextWindowTokens?: number;
   maxOutputTokens?: number;
@@ -123,6 +137,7 @@ export class Agent {
         cacheReadInputTokens: stats?.cacheReadInputTokens ?? 0,
         cacheWriteInputTokens: stats?.cacheWriteInputTokens ?? 0,
         reasoningTokens: stats?.reasoningTokens ?? 0,
+        usageEstimatedSteps: stats?.usageEstimatedSteps ?? 0,
         verificationAttempts: stats?.verificationAttempts ?? 0,
         verificationStatus: stats?.verificationStatus ?? "not_run",
       });
@@ -132,7 +147,11 @@ export class Agent {
         this.messages = this.messages.slice(0, startingMessageCount);
         await this.emitRuntime(runId, "run.cancelled", { reason: (error as Error).message });
       } else {
-        await this.emitRuntime(runId, "run.failed", { error: (error as Error).message, errorName: (error as Error).name });
+        await this.emitRuntime(runId, "run.failed", {
+          error: (error as Error).message,
+          errorName: (error as Error).name,
+          ...(error instanceof AgentBudgetError ? { budget: { kind: error.budget, limit: error.limit } } : {}),
+        });
       }
       throw error;
     } finally {
@@ -207,10 +226,12 @@ export class Agent {
         keptMessages: packed.report.keptMessages,
         omittedMessages: packed.report.omittedMessages,
       }, signal);
+      const requestMaxOutputTokens = this.providerOutputLimit(packed.report.totalTokens);
       await this.emitRuntime(runId, "model.requested", {
         step: step + 1,
         messageCount: packed.messages.length,
         toolCount: this.tools.list().length,
+        maxOutputTokens: requestMaxOutputTokens,
       }, signal);
       const modelStartedAt = Date.now();
       const deferStreamText = this.options.mode === "build"
@@ -222,6 +243,7 @@ export class Agent {
         messages: packed.messages.map(withoutEmptyToolCalls),
         tools: this.tools.definitions(),
         signal,
+        maxOutputTokens: requestMaxOutputTokens,
         ...(this.options.onProviderEvent ? {
           onEvent: (event: ProviderStreamEvent) => {
             if (event.type === "text_delta") {
@@ -234,15 +256,17 @@ export class Agent {
       }).finally(() => {
         if (this.activeRunStats) this.activeRunStats.modelDurationMs += Date.now() - modelStartedAt;
       });
-      this.addProviderUsage(response.usage);
+      const accounted = this.addProviderUsage(response.usage, packed.report.totalTokens, response);
       await this.emitRuntime(runId, "model.responded", {
         step: step + 1,
         durationMs: Date.now() - modelStartedAt,
         textLength: response.text.length,
         toolCalls: response.toolCalls.map((call) => call.name),
-        ...(response.usage ? { usage: response.usage } : {}),
+        usage: accounted.usage,
+        usageEstimated: accounted.estimated,
         ...(response.finishReason ? { finishReason: response.finishReason } : {}),
       }, signal);
+      if (response.toolCalls.length) this.ensureContinuationBudget();
 
       const deferCompletionText = response.toolCalls.length === 0
         && this.options.mode === "build"
@@ -500,14 +524,64 @@ export class Agent {
     this.options.onToolEvent?.(event);
   }
 
-  private addProviderUsage(usage?: ProviderUsage) {
-    if (!usage || !this.activeRunStats) return;
-    this.activeRunStats.inputTokens += usage.inputTokens ?? 0;
-    this.activeRunStats.outputTokens += usage.outputTokens ?? 0;
-    this.activeRunStats.totalTokens += usage.totalTokens ?? 0;
-    this.activeRunStats.cacheReadInputTokens += usage.cacheReadInputTokens ?? 0;
-    this.activeRunStats.cacheWriteInputTokens += usage.cacheWriteInputTokens ?? 0;
-    this.activeRunStats.reasoningTokens += usage.reasoningTokens ?? 0;
+  private providerOutputLimit(nextInputTokens: number) {
+    const stats = this.activeRunStats ?? emptyRunStats();
+    if (this.options.maxRunInputTokens !== undefined
+      && stats.inputTokens + nextInputTokens > this.options.maxRunInputTokens) {
+      throw new AgentBudgetError("input_tokens", this.options.maxRunInputTokens);
+    }
+    const outputRemaining = this.options.maxRunOutputTokens === undefined
+      ? Number.POSITIVE_INFINITY
+      : this.options.maxRunOutputTokens - stats.outputTokens;
+    if (outputRemaining < 1) throw new AgentBudgetError("output_tokens", this.options.maxRunOutputTokens!);
+    const totalRemaining = this.options.maxRunTotalTokens === undefined
+      ? Number.POSITIVE_INFINITY
+      : this.options.maxRunTotalTokens - stats.totalTokens - nextInputTokens;
+    if (totalRemaining < 1) throw new AgentBudgetError("total_tokens", this.options.maxRunTotalTokens!);
+    return Math.max(1, Math.floor(Math.min(
+      this.options.maxOutputTokens ?? 8_192,
+      outputRemaining,
+      totalRemaining,
+    )));
+  }
+
+  private addProviderUsage(usage: ProviderUsage | undefined, inputEstimate: number, response: ProviderCompletion) {
+    const outputEstimate = estimateTokens(`${response.text}\n${JSON.stringify(response.toolCalls)}`);
+    const accounted: ProviderUsage = {
+      inputTokens: usage?.inputTokens ?? inputEstimate,
+      outputTokens: usage?.outputTokens ?? outputEstimate,
+      totalTokens: usage?.totalTokens ?? (usage?.inputTokens ?? inputEstimate) + (usage?.outputTokens ?? outputEstimate),
+      ...(usage?.cacheReadInputTokens !== undefined ? { cacheReadInputTokens: usage.cacheReadInputTokens } : {}),
+      ...(usage?.cacheWriteInputTokens !== undefined ? { cacheWriteInputTokens: usage.cacheWriteInputTokens } : {}),
+      ...(usage?.reasoningTokens !== undefined ? { reasoningTokens: usage.reasoningTokens } : {}),
+    };
+    const estimated = usage?.inputTokens === undefined || usage.outputTokens === undefined || usage.totalTokens === undefined;
+    if (this.activeRunStats) {
+      this.activeRunStats.inputTokens += accounted.inputTokens ?? 0;
+      this.activeRunStats.outputTokens += accounted.outputTokens ?? 0;
+      this.activeRunStats.totalTokens += accounted.totalTokens ?? 0;
+      this.activeRunStats.cacheReadInputTokens += accounted.cacheReadInputTokens ?? 0;
+      this.activeRunStats.cacheWriteInputTokens += accounted.cacheWriteInputTokens ?? 0;
+      this.activeRunStats.reasoningTokens += accounted.reasoningTokens ?? 0;
+      if (estimated) this.activeRunStats.usageEstimatedSteps++;
+    }
+    return { usage: accounted, estimated };
+  }
+
+  private ensureContinuationBudget() {
+    if (!this.activeRunStats) return;
+    if (this.options.maxRunInputTokens !== undefined
+      && this.activeRunStats.inputTokens >= this.options.maxRunInputTokens) {
+      throw new AgentBudgetError("input_tokens", this.options.maxRunInputTokens);
+    }
+    if (this.options.maxRunOutputTokens !== undefined
+      && this.activeRunStats.outputTokens >= this.options.maxRunOutputTokens) {
+      throw new AgentBudgetError("output_tokens", this.options.maxRunOutputTokens);
+    }
+    if (this.options.maxRunTotalTokens !== undefined
+      && this.activeRunStats.totalTokens >= this.options.maxRunTotalTokens) {
+      throw new AgentBudgetError("total_tokens", this.options.maxRunTotalTokens);
+    }
   }
 }
 
@@ -524,6 +598,7 @@ function emptyRunStats(): AgentRunStats {
     cacheReadInputTokens: 0,
     cacheWriteInputTokens: 0,
     reasoningTokens: 0,
+    usageEstimatedSteps: 0,
     verificationAttempts: 0,
     verificationStatus: "not_run",
   };

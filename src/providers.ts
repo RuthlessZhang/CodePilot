@@ -365,7 +365,7 @@ export class OpenAIProvider implements Provider {
       headers: { authorization: `Bearer ${this.options.apiKey}`, "content-type": "application/json" },
       body: JSON.stringify({
         model: this.options.model,
-        max_tokens: this.options.maxOutputTokens ?? 8_192,
+        max_tokens: input.maxOutputTokens ?? this.options.maxOutputTokens ?? 8_192,
         messages: openAIMessages(input.system, input),
         tools: openAITools(input.tools),
         ...(streaming ? { stream: true, stream_options: { include_usage: true } } : {}),
@@ -424,7 +424,7 @@ export class AnthropicProvider implements Provider {
       },
       body: JSON.stringify({
         model: this.options.model,
-        max_tokens: this.options.maxOutputTokens ?? 8_192,
+        max_tokens: input.maxOutputTokens ?? this.options.maxOutputTokens ?? 8_192,
         system: input.system,
         messages: anthropicMessages(input.messages),
         tools: input.tools.map((tool) => ({

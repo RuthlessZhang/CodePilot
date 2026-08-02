@@ -12,6 +12,7 @@ type RequestFingerprint = {
   toolsSha256: string;
   messageCount: number;
   toolCount: number;
+  maxOutputTokens?: number;
 };
 
 type RecordedOutcome =
@@ -62,6 +63,7 @@ export function fingerprintProviderInput(input: ProviderCompletionInput): Reques
     toolsSha256: sha256(input.tools),
     messageCount: input.messages.length,
     toolCount: input.tools.length,
+    ...(input.maxOutputTokens !== undefined ? { maxOutputTokens: input.maxOutputTokens } : {}),
   };
 }
 
@@ -201,6 +203,12 @@ export class ReplayProvider implements Provider {
     if (actual.sha256 !== record.request.sha256) {
       throw new ProviderReplayMismatchError(
         `Provider replay mismatch at interaction ${this.cursor + 1}: expected ${record.request.sha256}, received ${actual.sha256}`,
+      );
+    }
+    if (record.request.maxOutputTokens !== undefined
+      && actual.maxOutputTokens !== record.request.maxOutputTokens) {
+      throw new ProviderReplayMismatchError(
+        `Provider replay output limit mismatch at interaction ${this.cursor + 1}: expected ${record.request.maxOutputTokens}, received ${actual.maxOutputTokens ?? "unset"}`,
       );
     }
     for (const event of record.events ?? []) input.onEvent?.(structuredClone(event));

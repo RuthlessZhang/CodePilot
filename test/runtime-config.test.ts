@@ -92,6 +92,9 @@ test("loads validated runtime audit and protected path configuration", async () 
     runtimeAuditPath: ".codepilot/custom-audit.jsonl",
     runtimeHookTimeoutMs: 1,
     providerRecordPath: ".codepilot/replays/latest.jsonl",
+    maxRunInputTokens: 500_000,
+    maxRunOutputTokens: 25_000,
+    maxRunTotalTokens: 525_000,
     protectedPaths: ["generated/**", "", "generated/**", 42],
   }));
 
@@ -101,6 +104,9 @@ test("loads validated runtime audit and protected path configuration", async () 
   assert.equal(config.runtimeHookTimeoutMs, 10);
   assert.equal(config.providerRecordPath, ".codepilot/replays/latest.jsonl");
   assert.equal(config.providerReplayPath, undefined);
+  assert.equal(config.maxRunInputTokens, 500_000);
+  assert.equal(config.maxRunOutputTokens, 25_000);
+  assert.equal(config.maxRunTotalTokens, 525_000);
   assert.deepEqual(config.protectedPaths, ["generated/**"]);
 });
 

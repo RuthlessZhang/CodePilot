@@ -30,6 +30,7 @@ export type ProviderCompletionInput = {
   messages: Message[];
   tools: ToolDef[];
   signal?: AbortSignal;
+  maxOutputTokens?: number;
   onEvent?: (event: ProviderStreamEvent) => void;
 };
 

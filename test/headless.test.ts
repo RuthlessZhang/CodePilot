@@ -30,6 +30,7 @@ class FakeAgent {
       cacheReadInputTokens: 0,
       cacheWriteInputTokens: 0,
       reasoningTokens: 0,
+      usageEstimatedSteps: 0,
       verificationAttempts: 0,
       verificationStatus: "passed",
     },
@@ -122,6 +123,7 @@ test("maps skipped verification and budget failures to stable headless exit code
   });
   assert.equal(budget.status, "budget_exceeded");
   assert.equal(budget.exitCode, 2);
+  assert.deepEqual(budget.budgetExceeded, { kind: "tool_calls", limit: 3 });
 });
 
 test("cancels a headless task when its runtime budget expires", async () => {

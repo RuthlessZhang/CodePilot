@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 import { mkdir, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { AgentBudgetError, type AgentRunStats } from "./agent.js";
+import { AgentBudgetError, type AgentBudgetKind, type AgentRunStats } from "./agent.js";
 import type { ProviderExecutionMode } from "./provider-replay.js";
 
 export type HeadlessStatus = "completed" | "failed" | "incomplete" | "budget_exceeded" | "timeout" | "cancelled";
@@ -32,7 +32,15 @@ export type HeadlessResult = {
   sessionId: string;
   response?: string;
   error?: string;
-  budgets: { maxRuntimeMs: number; maxSteps: number; maxToolCalls: number };
+  budgetExceeded?: { kind: AgentBudgetKind; limit: number };
+  budgets: {
+    maxRuntimeMs: number;
+    maxSteps: number;
+    maxToolCalls: number;
+    maxRunInputTokens?: number;
+    maxRunOutputTokens?: number;
+    maxRunTotalTokens?: number;
+  };
   usage: AgentRunStats;
   provider: {
     name: string;
@@ -58,6 +66,9 @@ type RunHeadlessOptions = {
   maxRuntimeMs: number;
   maxSteps: number;
   maxToolCalls: number;
+  maxRunInputTokens?: number;
+  maxRunOutputTokens?: number;
+  maxRunTotalTokens?: number;
   resultPath?: string;
   patchPath?: string;
   capturePatch?: (root: string) => Promise<PatchCapture>;
@@ -146,6 +157,7 @@ function emptyRunStats(): AgentRunStats {
     cacheReadInputTokens: 0,
     cacheWriteInputTokens: 0,
     reasoningTokens: 0,
+    usageEstimatedSteps: 0,
     verificationAttempts: 0,
     verificationStatus: "not_run",
   };
@@ -165,6 +177,7 @@ export async function runHeadless(options: RunHeadlessOptions): Promise<Headless
   let status: HeadlessStatus = "completed";
   let response: string | undefined;
   let errorMessage: string | undefined;
+  let budgetExceeded: HeadlessResult["budgetExceeded"];
   const timer = setTimeout(() => {
     timedOut = true;
     options.agent.cancel();
@@ -177,7 +190,10 @@ export async function runHeadless(options: RunHeadlessOptions): Promise<Headless
     errorMessage = (error as Error).message;
     if (timedOut) status = "timeout";
     else if ((error as Error).name === "AbortError") status = "cancelled";
-    else if (error instanceof AgentBudgetError) status = "budget_exceeded";
+    else if (error instanceof AgentBudgetError) {
+      status = "budget_exceeded";
+      budgetExceeded = { kind: error.budget, limit: error.limit };
+    }
     else status = "failed";
   } finally {
     clearTimeout(timer);
@@ -200,7 +216,15 @@ export async function runHeadless(options: RunHeadlessOptions): Promise<Headless
     sessionId: options.agent.getSessionId(),
     ...(response !== undefined ? { response } : {}),
     ...(errorMessage ? { error: errorMessage } : {}),
-    budgets: { maxRuntimeMs: options.maxRuntimeMs, maxSteps: options.maxSteps, maxToolCalls: options.maxToolCalls },
+    ...(budgetExceeded ? { budgetExceeded } : {}),
+    budgets: {
+      maxRuntimeMs: options.maxRuntimeMs,
+      maxSteps: options.maxSteps,
+      maxToolCalls: options.maxToolCalls,
+      ...(options.maxRunInputTokens !== undefined ? { maxRunInputTokens: options.maxRunInputTokens } : {}),
+      ...(options.maxRunOutputTokens !== undefined ? { maxRunOutputTokens: options.maxRunOutputTokens } : {}),
+      ...(options.maxRunTotalTokens !== undefined ? { maxRunTotalTokens: options.maxRunTotalTokens } : {}),
+    },
     usage: stats,
     provider: options.provider ?? { name: "unknown", model: "unknown", mode: "live" },
     artifact: {

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import os from "node:os";
 import path from "node:path";
 import { mkdir, mkdtemp, readFile, readdir, realpath, writeFile } from "node:fs/promises";
-import { Agent } from "../src/agent.js";
+import { Agent, AgentBudgetError } from "../src/agent.js";
 import { expandFileReferences, findFileReferences } from "../src/context.js";
 import { loadInstructions, loadRelevantRules } from "../src/instructions.js";
 import { loadConfig } from "../src/config.js";
@@ -286,9 +286,94 @@ test("streams provider text once and accumulates provider usage in run stats", a
     cacheReadInputTokens: 4,
     cacheWriteInputTokens: 0,
     reasoningTokens: 1,
+    usageEstimatedSteps: 0,
     verificationAttempts: 0,
     verificationStatus: "not_run",
   });
+});
+
+test("caps each provider request by the remaining run output-token budget", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "codepilot-output-budget-"));
+  let requestedLimit: number | undefined;
+  const provider: Provider = {
+    async complete(input) {
+      requestedLimit = input.maxOutputTokens;
+      return { text: "done", toolCalls: [], usage: { inputTokens: 20, outputTokens: 5, totalTokens: 25 } };
+    },
+  };
+  const agent = new Agent({
+    root,
+    provider,
+    tools: [],
+    approve: async () => true,
+    maxSteps: 2,
+    maxOutputTokens: 8_192,
+    maxRunOutputTokens: 5,
+    contextBudgetTokens: 64_000,
+    mode: "build",
+    autoVerify: false,
+  });
+
+  assert.equal(await agent.run("finish briefly"), "done");
+  assert.equal(requestedLimit, 5);
+  assert.equal(agent.getLastRunStats()?.outputTokens, 5);
+});
+
+test("stops before a provider call when the run input-token budget cannot fit context", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "codepilot-input-budget-"));
+  let calls = 0;
+  const provider: Provider = {
+    async complete() {
+      calls++;
+      return { text: "should not run", toolCalls: [] };
+    },
+  };
+  const agent = new Agent({
+    root,
+    provider,
+    tools: [],
+    approve: async () => true,
+    maxSteps: 2,
+    maxRunInputTokens: 1,
+    contextBudgetTokens: 64_000,
+    mode: "build",
+    autoVerify: false,
+  });
+
+  await assert.rejects(agent.run("inspect the project"), (error: Error) => {
+    return error instanceof AgentBudgetError && error.budget === "input_tokens" && error.limit === 1;
+  });
+  assert.equal(calls, 0);
+});
+
+test("does not execute streamed tool calls after the total-token budget is exhausted", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "codepilot-total-budget-"));
+  const provider: Provider = {
+    async complete() {
+      return {
+        text: "",
+        toolCalls: [{ id: "blocked", name: "unknown_tool", arguments: {} }],
+        usage: { inputTokens: 90_000, outputTokens: 10_000, totalTokens: 100_000 },
+      };
+    },
+  };
+  const agent = new Agent({
+    root,
+    provider,
+    tools: [],
+    approve: async () => true,
+    maxSteps: 2,
+    maxRunTotalTokens: 100_000,
+    contextBudgetTokens: 64_000,
+    mode: "build",
+    autoVerify: false,
+  });
+
+  await assert.rejects(agent.run("call a tool"), (error: Error) => {
+    return error instanceof AgentBudgetError && error.budget === "total_tokens" && error.limit === 100_000;
+  });
+  assert.equal(agent.getLastRunStats()?.toolCalls, 0);
+  assert.equal(agent.getLastRunStats()?.totalTokens, 100_000);
 });
 
 test("does not fail verification for diagnostics that existed before the edit", async (t) => {
@@ -954,6 +1039,9 @@ test("selects deepseek from environment", async () => {
     assert.equal(config.providerMaxRetries, 2);
     assert.equal(config.providerRequestTimeoutMs, 120_000);
     assert.equal(config.maxToolCalls, 100);
+    assert.equal(config.maxRunInputTokens, 2_000_000);
+    assert.equal(config.maxRunOutputTokens, 100_000);
+    assert.equal(config.maxRunTotalTokens, 2_100_000);
     assert.equal(config.headlessMaxRuntimeMs, 900_000);
   } finally {
     old.deepseek === undefined

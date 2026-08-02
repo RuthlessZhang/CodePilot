@@ -15,10 +15,15 @@ export type RuntimeEventDataMap = {
     cacheReadInputTokens: number;
     cacheWriteInputTokens: number;
     reasoningTokens: number;
+    usageEstimatedSteps: number;
     verificationAttempts: number;
     verificationStatus: string;
   };
-  "run.failed": { error: string; errorName: string };
+  "run.failed": {
+    error: string;
+    errorName: string;
+    budget?: { kind: import("./agent.js").AgentBudgetKind; limit: number };
+  };
   "run.cancelled": { reason: string };
   "context.prepared": {
     step: number;
@@ -31,13 +36,14 @@ export type RuntimeEventDataMap = {
     keptMessages: number;
     omittedMessages: number;
   };
-  "model.requested": { step: number; messageCount: number; toolCount: number };
+  "model.requested": { step: number; messageCount: number; toolCount: number; maxOutputTokens: number };
   "model.responded": {
     step: number;
     durationMs: number;
     textLength: number;
     toolCalls: string[];
-    usage?: import("./types.js").ProviderUsage;
+    usage: import("./types.js").ProviderUsage;
+    usageEstimated: boolean;
     finishReason?: string;
   };
   "tool.requested": { name: string; risk?: Risk; args: Record<string, unknown> };

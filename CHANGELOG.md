@@ -12,6 +12,7 @@ All notable changes to CodePilot are documented in this file.
 - Headless metrics for model/tool duration, context compactions, verification attempts, and live/record/replay execution provenance.
 - Streaming OpenAI-compatible, DeepSeek, and Anthropic responses with incremental tool-call assembly and deterministic event replay.
 - Normalized provider token, cache, and reasoning usage in runtime events and headless run metrics.
+- Run-level input, output, and total Provider token budgets with per-request output caps, estimated-usage markers, `/usage`, and structured headless failure details.
 
 ### Changed
 

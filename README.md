@@ -74,6 +74,20 @@ Provider requests retry transient network failures, timeouts, malformed protocol
 
 Interactive OpenAI-compatible, DeepSeek, and Anthropic requests stream text to the terminal while incrementally assembling tool calls. CodePilot normalizes provider usage into input, output, total, cache-read, cache-write, and reasoning-token counters. Non-streaming headless calls still collect usage when the provider returns it. A stream may be retried before its first semantic event; after text or a tool-call delta has been emitted, failures are surfaced without retrying so output cannot be duplicated.
 
+### Run Token Budgets
+
+Every CLI run has independent input, output, and total Provider token limits. Before a request, CodePilot checks the packed input estimate and lowers that request's output limit to the remaining run allowance. If a Provider omits usage, the same transparent `characters / 4` estimator used by context packing is used for accounting and `usageEstimatedSteps` is incremented. A final answer may complete at the limit, but a tool call is never executed when there is no budget left for its continuation.
+
+```json
+{
+  "maxRunInputTokens": 2000000,
+  "maxRunOutputTokens": 100000,
+  "maxRunTotalTokens": 2100000
+}
+```
+
+The matching one-shot flags are `--max-run-input-tokens`, `--max-run-output-tokens`, and `--max-run-total-tokens`. In an interactive session, `/usage` shows the most recent run's counters.
+
 ### Provider Record and Replay
 
 Record provider interactions from a real run, then replay them offline without an API key:
@@ -90,7 +104,7 @@ npm run dev -- --headless `
   "Fix the parser regression"
 ```
 
-The same paths can be configured as `providerRecordPath` or `providerReplayPath` in `.codepilot.json`; the modes are mutually exclusive. Replay is strict and ordered: every packed system prompt, message list, and tool definition must produce the same SHA-256 request fingerprint, otherwise the run fails immediately with a replay mismatch. Stream events, normalized usage, final responses, and provider failures are recorded and reproduced, enabling deterministic rendering, timeout, and outage scenarios. Older response-only traces remain readable.
+The same paths can be configured as `providerRecordPath` or `providerReplayPath` in `.codepilot.json`; the modes are mutually exclusive. Replay is strict and ordered: every packed system prompt, message list, tool definition, and newly recorded per-request output cap must match, otherwise the run fails immediately with a replay mismatch. Stream events, normalized usage, final responses, and provider failures are recorded and reproduced, enabling deterministic rendering, timeout, and outage scenarios. Older response-only traces remain readable.
 
 Trace files never contain API keys, HTTP headers, system prompts, user messages, or tool definitions—the request side contains hashes and counts only. Successful model output and tool-call arguments are stored in full because replay needs them, so traces may still contain generated code or sensitive output. Keep them under the ignored `.codepilot/replays/` directory and review before sharing.
 
@@ -175,12 +189,15 @@ node C:\Users\18355\Documents\Codex\CodePilot\dist\cli.js `
   --max-runtime-ms 900000 `
   --max-steps 60 `
   --max-tool-calls 200 `
+  --max-run-input-tokens 2000000 `
+  --max-run-output-tokens 100000 `
+  --max-run-total-tokens 2100000 `
   --output .codepilot\runs\result.json `
   --patch-output .codepilot\runs\prediction.patch `
   "Fix the reported parser regression"
 ```
 
-Stable statuses and exit codes are `completed` (0), `failed` (1), `budget_exceeded` (2), `incomplete` (3), `timeout` (124), and `cancelled` (130). The result records task timing, session ID, model steps, tool calls, model/tool duration, normalized provider token usage, context compactions, verification attempts and status, provider execution mode and trace path, artifact paths, patch size, and SHA-256.
+Stable statuses and exit codes are `completed` (0), `failed` (1), `budget_exceeded` (2), `incomplete` (3), `timeout` (124), and `cancelled` (130). The result records task timing, session ID, model steps, tool calls, model/tool duration, normalized provider token usage, context compactions, verification attempts and status, provider execution mode and trace path, artifact paths, patch size, and SHA-256. Budget failures include a machine-readable `budgetExceeded` object with the exhausted budget kind and limit.
 
 Headless permissions fail closed: an `ask` decision is denied instead of waiting for stdin. Configure explicit `allow` rules or `autoApprove` only inside a trusted isolated workspace. Final patch capture includes tracked changes and up to 100 untracked files, excludes `.codepilot/**`, and does not modify the Git index.
 

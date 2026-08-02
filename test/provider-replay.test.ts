@@ -80,6 +80,18 @@ test("fails closed when replay input differs from the recorded interaction", asy
   assert.deepEqual(replay.getProgress(), { consumed: 0 });
 });
 
+test("new traces fail closed when the per-request output limit changes", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "codepilot-provider-limit-mismatch-"));
+  const trace = "provider-limit.jsonl";
+  const delegate: Provider = { async complete() { return { text: "done", toolCalls: [] }; } };
+  await new RecordingProvider(root, trace, delegate).complete(completionInput({ maxOutputTokens: 500 }));
+
+  await assert.rejects(
+    new ReplayProvider(root, trace).complete(completionInput({ maxOutputTokens: 250 })),
+    /output limit mismatch/,
+  );
+});
+
 test("records and deterministically replays final provider failures", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "codepilot-provider-error-"));
   const trace = "provider-error.jsonl";

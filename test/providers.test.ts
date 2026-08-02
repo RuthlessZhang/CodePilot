@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { AnthropicProvider, OpenAIProvider } from "../src/providers.js";
+import { AnthropicProvider, DeepSeekProvider, OpenAIProvider } from "../src/providers.js";
 import type { ProviderStreamEvent } from "../src/types.js";
 
 const input = { system: "Be careful", messages: [], tools: [] };
@@ -137,6 +137,28 @@ test("sends the configured output limit to provider APIs", async () => {
   }) as typeof fetch;
   await new OpenAIProvider(options(fetchImpl, { maxOutputTokens: 1_234 })).complete(input);
   assert.equal(bodies[0]?.max_tokens, 1_234);
+
+  await new OpenAIProvider(options(fetchImpl, { maxOutputTokens: 1_234 })).complete({ ...input, maxOutputTokens: 321 });
+  assert.equal(bodies[1]?.max_tokens, 321);
+});
+
+test("applies per-request output budgets across DeepSeek and Anthropic adapters", async () => {
+  const bodies: Array<Record<string, unknown>> = [];
+  const openAIFetch = (async (_url: unknown, init?: RequestInit) => {
+    bodies.push(JSON.parse(String(init?.body)));
+    return json(openAIMessage());
+  }) as typeof fetch;
+  const anthropicFetch = (async (_url: unknown, init?: RequestInit) => {
+    bodies.push(JSON.parse(String(init?.body)));
+    return json({ content: [] });
+  }) as typeof fetch;
+
+  await new DeepSeekProvider(options(openAIFetch)).complete({ ...input, maxOutputTokens: 456 });
+  await new AnthropicProvider(options(anthropicFetch)).complete({ ...input, maxOutputTokens: 789 });
+
+  assert.equal(bodies[0]?.max_tokens, 456);
+  assert.equal(bodies[0]?.temperature, 0);
+  assert.equal(bodies[1]?.max_tokens, 789);
 });
 
 test("streams OpenAI-compatible text, indexed tool arguments, and final usage", async () => {

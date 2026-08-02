@@ -14,6 +14,9 @@ export type Config = {
   baseUrl: string;
   maxSteps: number;
   maxToolCalls: number;
+  maxRunInputTokens: number;
+  maxRunOutputTokens: number;
+  maxRunTotalTokens: number;
   headlessMaxRuntimeMs: number;
   contextWindowTokens: number;
   contextBudgetTokens: number;
@@ -163,6 +166,24 @@ export async function loadConfig(
       providerDefaults.baseUrl,
     maxSteps: boundedInteger(overrides.maxSteps ?? fileConfig.maxSteps, 30, 1, 500),
     maxToolCalls: boundedInteger(overrides.maxToolCalls ?? fileConfig.maxToolCalls, 100, 1, 2_000),
+    maxRunInputTokens: boundedInteger(
+      overrides.maxRunInputTokens ?? fileConfig.maxRunInputTokens,
+      2_000_000,
+      1,
+      100_000_000,
+    ),
+    maxRunOutputTokens: boundedInteger(
+      overrides.maxRunOutputTokens ?? fileConfig.maxRunOutputTokens,
+      100_000,
+      1,
+      10_000_000,
+    ),
+    maxRunTotalTokens: boundedInteger(
+      overrides.maxRunTotalTokens ?? fileConfig.maxRunTotalTokens,
+      2_100_000,
+      1,
+      100_000_000,
+    ),
     headlessMaxRuntimeMs: boundedInteger(
       overrides.headlessMaxRuntimeMs ?? fileConfig.headlessMaxRuntimeMs,
       900_000,

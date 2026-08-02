@@ -42,7 +42,8 @@ function integerArg(args: string[], flag: string) {
 function promptFromArgs(args: string[]) {
   const flagsWithValues = new Set([
     "--provider", "--model", "--mode", "--cwd", "--session", "--max-runtime-ms", "--max-steps",
-    "--max-tool-calls", "--output", "--patch-output", "--record-provider", "--replay-provider",
+    "--max-tool-calls", "--max-run-input-tokens", "--max-run-output-tokens", "--max-run-total-tokens",
+    "--output", "--patch-output", "--record-provider", "--replay-provider",
   ]);
   return args
     .filter((arg, index) => !arg.startsWith("--") && !flagsWithValues.has(args[index - 1]))
@@ -73,6 +74,7 @@ function help() {
 /memory [query]       Show the memory index and relevant topics
 /rules [query]        Show all instructions or rules selected for a query
 /context              Show context budget report
+/usage                Show usage for the last agent run
 /compact              Summarize old messages and keep recent context
 /todo                 Show current task list
 /undo                 Restore files changed by the previous agent run
@@ -95,6 +97,9 @@ async function main() {
     model: argValue(args, "--model"),
     maxSteps: integerArg(args, "--max-steps"),
     maxToolCalls: integerArg(args, "--max-tool-calls"),
+    maxRunInputTokens: integerArg(args, "--max-run-input-tokens"),
+    maxRunOutputTokens: integerArg(args, "--max-run-output-tokens"),
+    maxRunTotalTokens: integerArg(args, "--max-run-total-tokens"),
     headlessMaxRuntimeMs: integerArg(args, "--max-runtime-ms"),
     providerRecordPath: argValue(args, "--record-provider"),
     providerReplayPath: argValue(args, "--replay-provider"),
@@ -177,6 +182,9 @@ async function main() {
       : approval(config.autoApprove, root, config.permissions),
     maxSteps: config.maxSteps,
     maxToolCalls: config.maxToolCalls,
+    maxRunInputTokens: config.maxRunInputTokens,
+    maxRunOutputTokens: config.maxRunOutputTokens,
+    maxRunTotalTokens: config.maxRunTotalTokens,
     contextBudgetTokens: config.contextBudgetTokens,
     contextWindowTokens: config.contextWindowTokens,
     maxOutputTokens: config.maxOutputTokens,
@@ -254,6 +262,9 @@ async function main() {
           maxRuntimeMs: config.headlessMaxRuntimeMs,
           maxSteps: config.maxSteps,
           maxToolCalls: config.maxToolCalls,
+          maxRunInputTokens: config.maxRunInputTokens,
+          maxRunOutputTokens: config.maxRunOutputTokens,
+          maxRunTotalTokens: config.maxRunTotalTokens,
           resultPath: argValue(args, "--output"),
           patchPath: argValue(args, "--patch-output"),
           provider: {
@@ -371,6 +382,11 @@ async function main() {
       }
       if (question === "/context") {
         console.log(await agent.contextReport());
+        continue;
+      }
+      if (question === "/usage") {
+        const usage = agent.getLastRunStats();
+        console.log(usage ? JSON.stringify(usage, null, 2) : "(no completed run yet)");
         continue;
       }
       if (question === "/compact") {
