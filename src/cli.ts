@@ -12,6 +12,8 @@ import { initProject } from "./init.js";
 import { loadInstructions, loadRelevantRules } from "./instructions.js";
 import { assertSafeCredentialPolicy, loadConfig } from "./config.js";
 import { loadRelevantMemory, readMemory, remember } from "./memory.js";
+import { loadMcpConfiguration } from "./mcp-config.js";
+import { connectMcpServers, formatMcpStatuses } from "./mcp-runtime.js";
 import { saveProjectIndex, summarizeProjectIndex } from "./project.js";
 import { approval, nonInteractiveApproval } from "./permissions.js";
 import { readTodos, summarizeTodos } from "./todo.js";
@@ -39,6 +41,17 @@ function integerArg(args: string[], flag: string) {
   const parsed = Number(value);
   if (!Number.isInteger(parsed) || parsed <= 0) throw Error(`${flag} must be a positive integer`);
   return parsed;
+}
+
+async function connectMcpWithInterrupt(root: string, configuration: Awaited<ReturnType<typeof loadMcpConfiguration>>) {
+  const controller = new AbortController();
+  const interrupt = () => controller.abort(new DOMException("MCP startup cancelled", "AbortError"));
+  process.once("SIGINT", interrupt);
+  try {
+    return await connectMcpServers(root, configuration, controller.signal);
+  } finally {
+    process.off("SIGINT", interrupt);
+  }
 }
 
 function promptFromArgs(args: string[]) {
@@ -73,6 +86,7 @@ function help() {
 /index                Build .codepilot/index.json
 /check                Run detected verification commands
 /doctor               Diagnose provider, credentials, dependencies, and project checks
+/mcp                  Show configured MCP server connection and tool status
 /remember [topic:] <note> Save a durable topic memory
 /memory [query]       Show the memory index and relevant topics
 /rules [query]        Show all instructions or rules selected for a query
@@ -93,6 +107,24 @@ async function main() {
     await runAuthCommand(args.slice(1));
     return;
   }
+  if (args[0] === "mcp") {
+    const action = args[1];
+    if (!action || action === "help" || action === "--help" || action === "-h") {
+      console.log("Usage: codepilot mcp status [--cwd <workspace>]");
+      return;
+    }
+    if (action !== "status") throw Error(`Unknown MCP command: ${action}`);
+    const mcpRoot = await resolveWorkspace(process.cwd(), argValue(args, "--cwd"));
+    const configuration = await loadMcpConfiguration();
+    const runtime = await connectMcpWithInterrupt(mcpRoot, configuration);
+    try {
+      console.log(formatMcpStatuses(runtime.statuses));
+      process.exitCode = runtime.statuses.some((status) => status.state === "failed") ? 1 : 0;
+    } finally {
+      await runtime.dispose();
+    }
+    return;
+  }
   const headless = args.includes("--headless");
   const verbose = args.includes("--verbose");
   const root = await resolveWorkspace(process.cwd(), argValue(args, "--cwd"));
@@ -111,12 +143,13 @@ async function main() {
     providerRecordPath: argValue(args, "--record-provider"),
     providerReplayPath: argValue(args, "--replay-provider"),
   });
+  const mcpConfiguration = await loadMcpConfiguration();
 
   if (config.providerRecordPath && config.providerReplayPath) {
     throw Error("Provider record and replay modes are mutually exclusive");
   }
   if (args.includes("--doctor")) {
-    const report = await diagnose(root, config);
+    const report = await diagnose(root, config, mcpConfiguration);
     console.log(args.includes("--json") ? JSON.stringify(report, null, 2) : formatDoctorReport(report));
     process.exitCode = report.status === "error" ? 1 : 0;
     return;
@@ -175,47 +208,60 @@ async function main() {
       console.error(`\n[provider:usage] ${JSON.stringify(event.usage)}`);
     }
   };
-  const tools = createTools(root, {
+  const runtimeEvents = createConfiguredRuntime(root, config, ({ hook, event, error }) => {
+    if (!headless || verbose) console.error(`[hook:error] ${hook} on ${event}: ${error.message}`);
+  });
+  const mcpRuntime = await connectMcpWithInterrupt(root, mcpConfiguration);
+  for (const status of mcpRuntime.statuses.filter((entry) => entry.state === "failed")) {
+    console.error(`[mcp] ${status.name}: ${status.detail}`);
+  }
+  const tools = [...createTools(root, {
     beforeWrite: (file) => undo.snapshot(file),
     onOutput: (name, chunk) => renderToolEvent({ phase: "output", name, args: {}, content: chunk }),
     shellTimeoutMs: config.shellTimeoutMs,
     shellMaxOutputChars: config.shellMaxOutputChars,
-  });
+  }), ...mcpRuntime.tools];
   const disposeTools = async () => {
-    await Promise.allSettled(tools.map((tool) => tool.dispose?.()));
+    await Promise.allSettled([
+      ...tools.map((tool) => tool.dispose?.()),
+      mcpRuntime.dispose(),
+    ]);
   };
-  const runtimeEvents = createConfiguredRuntime(root, config, ({ hook, event, error }) => {
-    if (!headless || verbose) console.error(`[hook:error] ${hook} on ${event}: ${error.message}`);
-  });
-  const agent = new Agent({
-    root,
-    provider,
-    tools,
-    approve: headless
-      ? nonInteractiveApproval(config.autoApprove, config.permissions)
-      : approval(config.autoApprove, root, config.permissions),
-    maxSteps: config.maxSteps,
-    maxToolCalls: config.maxToolCalls,
-    maxRunInputTokens: config.maxRunInputTokens,
-    maxRunOutputTokens: config.maxRunOutputTokens,
-    maxRunTotalTokens: config.maxRunTotalTokens,
-    contextBudgetTokens: config.contextBudgetTokens,
-    contextWindowTokens: config.contextWindowTokens,
-    maxOutputTokens: config.maxOutputTokens,
-    contextSafetyMarginTokens: config.contextSafetyMarginTokens,
-    toolResultMaxTokens: config.toolResultMaxTokens,
-    oldToolResultMaxTokens: config.oldToolResultMaxTokens,
-    memoryIndexMaxTokens: config.memoryIndexMaxTokens,
-    memoryTopicMaxTokens: config.memoryTopicMaxTokens,
-    memoryTopicLimit: config.memoryTopicLimit,
-    autoVerify: config.autoVerify,
-    maxVerificationAttempts: config.maxVerificationAttempts,
-    mode,
-    onText: headless && !verbose ? undefined : (text) => console.log(text),
-    onProviderEvent: headless && !verbose ? undefined : renderProviderEvent,
-    onToolEvent: renderToolEvent,
-    runtimeEvents,
-  });
+  let agent: Agent;
+  try {
+    agent = new Agent({
+      root,
+      provider,
+      tools,
+      approve: headless
+        ? nonInteractiveApproval(config.autoApprove, config.permissions)
+        : approval(config.autoApprove, root, config.permissions),
+      maxSteps: config.maxSteps,
+      maxToolCalls: config.maxToolCalls,
+      maxRunInputTokens: config.maxRunInputTokens,
+      maxRunOutputTokens: config.maxRunOutputTokens,
+      maxRunTotalTokens: config.maxRunTotalTokens,
+      contextBudgetTokens: config.contextBudgetTokens,
+      contextWindowTokens: config.contextWindowTokens,
+      maxOutputTokens: config.maxOutputTokens,
+      contextSafetyMarginTokens: config.contextSafetyMarginTokens,
+      toolResultMaxTokens: config.toolResultMaxTokens,
+      oldToolResultMaxTokens: config.oldToolResultMaxTokens,
+      memoryIndexMaxTokens: config.memoryIndexMaxTokens,
+      memoryTopicMaxTokens: config.memoryTopicMaxTokens,
+      memoryTopicLimit: config.memoryTopicLimit,
+      autoVerify: config.autoVerify,
+      maxVerificationAttempts: config.maxVerificationAttempts,
+      mode,
+      onText: headless && !verbose ? undefined : (text) => console.log(text),
+      onProviderEvent: headless && !verbose ? undefined : renderProviderEvent,
+      onToolEvent: renderToolEvent,
+      runtimeEvents,
+    });
+  } catch (error) {
+    await disposeTools();
+    throw error;
+  }
 
   const setMode = (next: AgentMode) => {
     mode = next;
@@ -365,7 +411,11 @@ async function main() {
         continue;
       }
       if (question === "/doctor") {
-        console.log(formatDoctorReport(await diagnose(root, config)));
+        console.log(formatDoctorReport(await diagnose(root, config, mcpConfiguration)));
+        continue;
+      }
+      if (question === "/mcp") {
+        console.log(formatMcpStatuses(mcpRuntime.statuses));
         continue;
       }
       if (question.startsWith("/remember ")) {
@@ -457,5 +507,5 @@ async function main() {
 
 main().catch((error) => {
   console.error(error.message);
-  process.exitCode = 1;
+  process.exitCode = error.name === "AbortError" ? 130 : 1;
 });

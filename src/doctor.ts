@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import { access } from "node:fs/promises";
 import path from "node:path";
 import type { Config } from "./config.js";
+import type { McpConfiguration } from "./mcp-config.js";
 import { buildProjectIndex } from "./project.js";
 import { resolveProviderCapabilities, type ProviderCapabilities } from "./provider-catalog.js";
 
@@ -59,7 +60,7 @@ async function localBinary(root: string, name: string) {
   return undefined;
 }
 
-export async function diagnose(root: string, config: Config): Promise<DoctorReport> {
+export async function diagnose(root: string, config: Config, mcp?: McpConfiguration): Promise<DoctorReport> {
   const checks: DoctorCheck[] = [];
   const credentialSource = config.providerReplayPath
     ? "provider replay (credential not required)"
@@ -141,6 +142,19 @@ export async function diagnose(root: string, config: Config): Promise<DoctorRepo
     status: "pass",
     detail: `window=${config.contextWindowTokens}, input=${config.contextBudgetTokens}, output=${config.maxOutputTokens}, safety=${config.contextSafetyMarginTokens}`,
   });
+
+  if (mcp) {
+    for (const issue of mcp.issues) {
+      checks.push({ name: "mcp configuration", status: "warning", detail: issue });
+    }
+    checks.push({
+      name: "mcp servers",
+      status: "pass",
+      detail: mcp.servers.length
+        ? `${mcp.servers.map((server) => `${server.name}:${server.transport}`).join(", ")} (configuration validated; connections not opened by doctor)`
+        : "No MCP servers configured in the user-level CodePilot config.",
+    });
+  }
 
   const status = checks.some((check) => check.status === "fail")
     ? "error"

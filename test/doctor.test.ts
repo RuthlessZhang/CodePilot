@@ -6,6 +6,7 @@ import { mkdtemp, writeFile } from "node:fs/promises";
 import { assertSafeCredentialPolicy, loadConfig } from "../src/config.js";
 import { setStoredCredential } from "../src/credentials.js";
 import { diagnose, formatDoctorReport } from "../src/doctor.js";
+import type { McpConfiguration } from "../src/mcp-config.js";
 
 test("doctor reports effective capabilities and credential source without exposing values", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "codepilot-doctor-"));
@@ -91,4 +92,27 @@ test("doctor reports a user credential store without exposing its value", async 
       ? delete process.env.CODEPILOT_CONFIG_DIR
       : (process.env.CODEPILOT_CONFIG_DIR = previousDirectory);
   }
+});
+
+test("doctor validates MCP configuration without opening server connections", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "codepilot-doctor-mcp-"));
+  const config = await loadConfig(root, { provider: "deepseek", apiKey: "doctor-key" });
+  const mcp: McpConfiguration = {
+    servers: [{
+      name: "remote-docs",
+      transport: "http",
+      url: "https://mcp.example.invalid/mcp",
+      bearerTokenEnv: "MCP_DOCS_TOKEN",
+    }],
+    issues: ["MCP server invalid-entry: transport must be stdio or http"],
+    requestTimeoutMs: 30_000,
+    toolOutputMaxChars: 200_000,
+  };
+  const report = await diagnose(root, config, mcp);
+  const formatted = formatDoctorReport(report);
+
+  assert.equal(report.checks.find((check) => check.name === "mcp configuration")?.status, "warning");
+  assert.match(formatted, /remote-docs:http/);
+  assert.match(formatted, /connections not opened by doctor/);
+  assert.doesNotMatch(formatted, /doctor-key/);
 });

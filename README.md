@@ -159,6 +159,40 @@ The command exits nonzero if any contract fails and writes an atomic JSON report
 
 The repository also includes a manually dispatched `DeepSeek Provider Smoke` GitHub workflow. Create a protected GitHub Environment named `provider-smoke`, add `DEEPSEEK_API_KEY` as an environment secret, and run the workflow from the Actions tab when a release or Provider change needs real validation. It never runs on push or pull requests, serializes executions to avoid duplicate spend, and retains only the redacted report artifact for seven days.
 
+## MCP Servers
+
+CodePilot can discover and call tools from local stdio MCP servers and remote Streamable HTTP MCP endpoints. Executable MCP configuration is accepted only from the user-level CodePilot `config.json`, never from a repository's `.codepilot.json`. This makes adding a server an explicit user trust decision.
+
+```json
+{
+  "mcpServers": {
+    "local-docs": {
+      "transport": "stdio",
+      "command": "node",
+      "args": ["C:\\tools\\docs-mcp\\server.js"],
+      "env": {
+        "DOCS_TOKEN": "MY_DOCS_TOKEN"
+      }
+    },
+    "remote-search": {
+      "transport": "http",
+      "url": "https://mcp.example.com/mcp",
+      "bearerTokenEnv": "REMOTE_MCP_TOKEN"
+    }
+  },
+  "mcpRequestTimeoutMs": 30000,
+  "mcpToolOutputMaxChars": 200000
+}
+```
+
+For stdio servers, `env` maps a child-process variable name to an existing host variable name; secret values are not written into the configuration. MCP subprocesses receive a small operating-system environment allowlist plus only these explicit mappings, so Provider API keys are not inherited accidentally. The default working directory is the active CodePilot workspace. On Windows, commands implemented as command scripts may need their explicit `.cmd` executable name.
+
+Remote endpoints must use HTTPS; plain HTTP is accepted only for `localhost`, `127.0.0.1`, and `::1`. Redirects are rejected. This release supports public endpoints and environment-backed Bearer authentication, JSON responses, POST-carried SSE responses, MCP session IDs, cancellation, and best-effort session deletion. Interactive OAuth and out-of-band server notification streams are planned for a later stage.
+
+Discovered tools use portable names such as `mcp_local-docs_search` and are always classified as `execute`, regardless of server-provided read-only annotations. They therefore require normal CodePilot permission approval unless a trusted policy explicitly permits the exact tool. Timed-out calls are not retried automatically because their remote side effects may already have occurred.
+
+CodePilot caps each server at 128 tools, all active MCP servers at 128 tools and 256,000 definition characters, individual schemas at 64,000 characters, and returned tool output at `mcpToolOutputMaxChars`. These limits protect the context window and persisted session history. `/mcp` shows status inside an active session. `codepilot mcp status` (or `npm run dev -- mcp status`) actively connects, discovers tools, prints safe status, and exits without requiring a model credential. `/doctor` validates configuration without launching subprocesses or opening network connections.
+
 `permissions` is a project-local policy layer. It supports exact tool names and `shell:<glob>` command rules; the most specific matching shell rule wins. It takes precedence over the older risk-level `autoApprove` setting:
 
 ```json
@@ -187,6 +221,7 @@ The repository also includes a manually dispatched `DeepSeek Provider Smoke` Git
 /index                Build .codepilot/index.json
 /check                Run detected verification commands
 /doctor               Diagnose provider, credentials, dependencies, and project checks
+/mcp                  Show configured MCP server connection and tool status
 /remember [topic:] <note> Save a durable topic memory
 /memory [query]       Show the memory index and relevant topics
 /rules [query]        Show all instructions or rules selected for a query
