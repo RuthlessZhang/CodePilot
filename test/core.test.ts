@@ -1008,14 +1008,20 @@ test("migrates one legacy summary when its session is resumed", async () => {
 
 test("deepseek flash summarizer falls back without api key", async () => {
   const old = process.env.DEEPSEEK_API_KEY;
+  const oldDirectory = process.env.CODEPILOT_CONFIG_DIR;
+  const directory = await mkdtemp(path.join(os.tmpdir(), "codepilot-summary-config-"));
   try {
     delete process.env.DEEPSEEK_API_KEY;
+    process.env.CODEPILOT_CONFIG_DIR = directory;
     const result = await summarizeWithDeepSeekFlash([{ role: "user", content: "remember this task" }]);
     assert.equal(result.mode, "fallback");
     assert.equal(result.model, "local-fallback");
     assert.match(result.text, /remember this task/);
   } finally {
     old === undefined ? delete process.env.DEEPSEEK_API_KEY : (process.env.DEEPSEEK_API_KEY = old);
+    oldDirectory === undefined
+      ? delete process.env.CODEPILOT_CONFIG_DIR
+      : (process.env.CODEPILOT_CONFIG_DIR = oldDirectory);
   }
 });
 

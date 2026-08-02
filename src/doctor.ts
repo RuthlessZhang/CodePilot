@@ -70,7 +70,14 @@ export async function diagnose(root: string, config: Config): Promise<DoctorRepo
   if (config.providerReplayPath) {
     checks.push({ name: "credential", status: "pass", detail: credentialSource });
   } else if (!config.apiKey) {
-    checks.push({ name: "credential", status: "fail", detail: "No credential is available for the selected provider." });
+    const detail = config.credentialError === "helper_failed"
+      ? "The user-level apiKeyHelper failed or its configuration is invalid."
+      : config.credentialError === "helper_empty"
+        ? "The user-level apiKeyHelper returned an empty value."
+        : config.credentialError === "store_invalid"
+          ? "The user-level credential store is malformed or unreadable."
+          : "No credential is available for the selected provider.";
+    checks.push({ name: "credential", status: "fail", detail });
   } else if (config.projectApiKeyPresent) {
     checks.push({
       name: "credential",

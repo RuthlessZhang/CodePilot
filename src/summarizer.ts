@@ -1,4 +1,6 @@
 import { DeepSeekProvider } from "./providers.js";
+import { resolveProviderCredential } from "./credentials.js";
+import { providerDefinition } from "./provider-catalog.js";
 import { summarizeMessages } from "./session-summary.js";
 import { truncateToTokens } from "./token.js";
 import type { Message } from "./types.js";
@@ -34,12 +36,16 @@ function fallback(messages: Message[], reason = "model summarizer unavailable"):
 }
 
 export async function summarizeWithDeepSeekFlash(messages: Message[]): Promise<SummaryResult> {
-  const apiKey = process.env.DEEPSEEK_API_KEY;
-  if (!apiKey) return fallback(messages, "DEEPSEEK_API_KEY is not set");
+  const credential = await resolveProviderCredential({ provider: "deepseek" });
+  if (!credential.apiKey) {
+    return fallback(messages, credential.error
+      ? `DeepSeek credential resolution failed (${credential.error})`
+      : "DeepSeek credential is not configured");
+  }
 
   const provider = new DeepSeekProvider({
-    apiKey,
-    baseUrl: process.env.DEEPSEEK_BASE_URL ?? "https://api.deepseek.com",
+    apiKey: credential.apiKey,
+    baseUrl: process.env.DEEPSEEK_BASE_URL ?? providerDefinition("deepseek").defaultBaseUrl,
     model: "deepseek-v4-flash",
   });
 

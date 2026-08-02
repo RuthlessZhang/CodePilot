@@ -3,6 +3,7 @@ import { exec } from "node:child_process";
 import { stdin, stdout } from "node:process";
 import { createInterface } from "node:readline/promises";
 import { Agent } from "./agent.js";
+import { runAuthCommand } from "./auth.js";
 import { runChecks } from "./check.js";
 import { expandFileReferences } from "./context.js";
 import { diagnose, formatDoctorReport } from "./doctor.js";
@@ -88,6 +89,10 @@ function help() {
 
 async function main() {
   const args = process.argv.slice(2);
+  if (args[0] === "auth") {
+    await runAuthCommand(args.slice(1));
+    return;
+  }
   const headless = args.includes("--headless");
   const verbose = args.includes("--verbose");
   const root = await resolveWorkspace(process.cwd(), argValue(args, "--cwd"));

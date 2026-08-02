@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { resolveModelContextProfile, type ProviderName } from "./model-context.js";
 import { inferProviderFromEnvironment, providerDefinition } from "./provider-catalog.js";
+import { resolveProviderCredential, type CredentialError, type CredentialSource } from "./credentials.js";
 import type { Risk } from "./types.js";
 
 export type { ProviderName } from "./model-context.js";
@@ -12,7 +13,8 @@ export type Config = {
   provider: ProviderName;
   model: string;
   apiKey?: string;
-  credentialSource?: { kind: "override" | "environment" | "project_config"; name: string };
+  credentialSource?: CredentialSource;
+  credentialError?: CredentialError;
   projectApiKeyPresent: boolean;
   baseUrl: string;
   maxSteps: number;
@@ -120,22 +122,19 @@ export async function loadConfig(
     throw Error("Provider record and replay modes are mutually exclusive");
   }
 
-  const environmentApiKey = process.env[providerDefaults.apiKeyEnv];
   const projectApiKey = optionalString(fileConfig.apiKey);
-  const apiKey = overrides.apiKey ?? environmentApiKey ?? projectApiKey;
-  const credentialSource = overrides.apiKey
-    ? { kind: "override" as const, name: "runtime override" }
-    : environmentApiKey
-      ? { kind: "environment" as const, name: providerDefaults.apiKeyEnv }
-      : projectApiKey
-        ? { kind: "project_config" as const, name: ".codepilot.json:apiKey" }
-        : undefined;
+  const credential = await resolveProviderCredential({
+    provider,
+    override: overrides.apiKey,
+    projectApiKey,
+  });
 
   return {
     provider,
     model,
-    apiKey,
-    ...(credentialSource ? { credentialSource } : {}),
+    apiKey: credential.apiKey,
+    ...(credential.source ? { credentialSource: credential.source } : {}),
+    ...(credential.error ? { credentialError: credential.error } : {}),
     projectApiKeyPresent: Boolean(projectApiKey),
     baseUrl:
       overrides.baseUrl ??

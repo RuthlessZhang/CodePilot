@@ -17,6 +17,7 @@ All notable changes to CodePilot are documented in this file.
 - Opt-in live Provider smoke matrix covering text, streaming, normalized usage, forced tool calls, cancellation, and exact offline replay with redacted reports.
 - Central Provider capability catalog plus credential-safe `--doctor` and `/doctor` diagnostics.
 - Manually dispatched, concurrency-locked DeepSeek smoke workflow with protected environment secrets and short-lived redacted artifacts.
+- User-level Provider credential lifecycle with hidden `auth set`, metadata-only `auth status`, `auth remove`, atomic local storage, and shell-free `apiKeyHelper` support.
 
 ### Changed
 
@@ -26,6 +27,7 @@ All notable changes to CodePilot are documented in this file.
 - Provider requests can require automatic or named tool selection across OpenAI-compatible, DeepSeek, and Anthropic protocols.
 - DeepSeek V4 reasoning content is preserved across tool continuations, while explicitly forced tool selection uses non-thinking mode for API compatibility.
 - Plaintext Provider API keys in `.codepilot.json` are rejected during normal execution.
+- Provider calls and DeepSeek context compaction now share one credential precedence chain: runtime override, environment, user helper, then user store.
 
 ## [0.2.0] - 2026-08-02
 

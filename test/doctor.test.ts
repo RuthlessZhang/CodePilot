@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { assertSafeCredentialPolicy, loadConfig } from "../src/config.js";
+import { setStoredCredential } from "../src/credentials.js";
 import { diagnose, formatDoctorReport } from "../src/doctor.js";
 
 test("doctor reports effective capabilities and credential source without exposing values", async () => {
@@ -46,9 +47,12 @@ test("doctor rejects plaintext project credentials", async () => {
 
 test("doctor remains available when the selected provider has no credential", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "codepilot-doctor-missing-"));
+  const credentialDirectory = await mkdtemp(path.join(os.tmpdir(), "codepilot-doctor-config-"));
   const previous = process.env.OPENAI_API_KEY;
+  const previousDirectory = process.env.CODEPILOT_CONFIG_DIR;
   try {
     delete process.env.OPENAI_API_KEY;
+    process.env.CODEPILOT_CONFIG_DIR = credentialDirectory;
     const report = await diagnose(root, await loadConfig(root, { provider: "openai" }));
     assert.equal(report.status, "error");
     assert.equal(report.credentialSource, "missing");
@@ -57,5 +61,34 @@ test("doctor remains available when the selected provider has no credential", as
     previous === undefined
       ? delete process.env.OPENAI_API_KEY
       : (process.env.OPENAI_API_KEY = previous);
+    previousDirectory === undefined
+      ? delete process.env.CODEPILOT_CONFIG_DIR
+      : (process.env.CODEPILOT_CONFIG_DIR = previousDirectory);
+  }
+});
+
+test("doctor reports a user credential store without exposing its value", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "codepilot-doctor-store-"));
+  const credentialDirectory = await mkdtemp(path.join(os.tmpdir(), "codepilot-doctor-config-"));
+  const previousKey = process.env.DEEPSEEK_API_KEY;
+  const previousDirectory = process.env.CODEPILOT_CONFIG_DIR;
+  try {
+    delete process.env.DEEPSEEK_API_KEY;
+    process.env.CODEPILOT_CONFIG_DIR = credentialDirectory;
+    await setStoredCredential("deepseek", "doctor-stored-secret", credentialDirectory);
+    const report = await diagnose(root, await loadConfig(root, { provider: "deepseek" }));
+    const formatted = formatDoctorReport(report);
+
+    assert.match(report.credentialSource, /^user_store:/);
+    assert.equal(report.checks.find((check) => check.name === "credential")?.status, "pass");
+    assert.doesNotMatch(JSON.stringify(report), /doctor-stored-secret/);
+    assert.doesNotMatch(formatted, /doctor-stored-secret/);
+  } finally {
+    previousKey === undefined
+      ? delete process.env.DEEPSEEK_API_KEY
+      : (process.env.DEEPSEEK_API_KEY = previousKey);
+    previousDirectory === undefined
+      ? delete process.env.CODEPILOT_CONFIG_DIR
+      : (process.env.CODEPILOT_CONFIG_DIR = previousDirectory);
   }
 });

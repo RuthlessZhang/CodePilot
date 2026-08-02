@@ -7,7 +7,7 @@ CodePilot is a small, auditable terminal coding agent written in TypeScript. It 
 ```powershell
 npm install
 npm run build
-$env:DEEPSEEK_API_KEY="..."
+npm run dev -- auth set deepseek
 npm run dev -- --provider deepseek
 ```
 
@@ -39,6 +39,32 @@ node C:\Users\18355\Documents\Codex\CodePilot\dist\cli.js --provider deepseek --
 
 ## Providers
 
+Configure a Provider credential once in CodePilot's user-level store:
+
+```powershell
+npm run dev -- auth set deepseek
+npm run dev -- auth status
+npm run dev -- auth remove deepseek
+```
+
+The installed CLI uses the equivalent `codepilot auth ...` commands. `auth set` hides interactive input; it also accepts a single piped line for automation. `auth status` reports only availability and source metadata, never credential values. `auth remove` deletes only the user-store value, so an environment variable or helper may still provide the effective credential.
+
+CodePilot resolves credentials in this order: an explicit runtime override, the Provider environment variable, a user-level `apiKeyHelper`, then the user credential store. Legacy project-level `apiKey` is recognized only so `/doctor` can report it and normal execution can reject it.
+
+The default user directory is `%USERPROFILE%\.codepilot` on Windows and `~/.codepilot` on macOS/Linux. Stored values live in `credentials.json`; CodePilot uses user-profile ACL inheritance on Windows and mode `0600` with a `0700` directory on POSIX. This local file is not encrypted at rest. For stronger isolation, configure a user-level helper in `config.json` that retrieves the key from your password manager or operating-system secret store:
+
+```json
+{
+  "apiKeyHelpers": {
+    "deepseek": ["C:\\path\\to\\credential-helper.exe", "read", "deepseek"]
+  }
+}
+```
+
+Helper commands are argument arrays, execute without a shell, have a 10-second timeout, and must write exactly one non-empty line to stdout. A configured helper fails closed: CodePilot will not silently fall back to the local store if the helper fails or emits invalid output. `CODEPILOT_CONFIG_DIR` can relocate the user directory, primarily for isolated automation and tests. Project `.codepilot.json` files cannot declare executable credential helpers.
+
+Environment variables remain supported and take precedence over the user store:
+
 OpenAI:
 
 ```powershell
@@ -61,11 +87,11 @@ $env:ANTHROPIC_API_KEY="..."
 npm run dev -- --provider anthropic
 ```
 
-CodePilot also reads `.codepilot.json` for `provider`, `model`, `baseUrl`, runtime limits, context and memory budgets, verification, provider retry, Shell limits, permissions, runtime auditing, and protected paths. Keep API keys in environment variables. The context-specific settings are documented under [Context Window Management](#context-window-management).
+CodePilot also reads `.codepilot.json` for `provider`, `model`, `baseUrl`, runtime limits, context and memory budgets, verification, provider retry, Shell limits, permissions, runtime auditing, and protected paths. Keep credentials in the user store, a user-level helper, or environment variables. The context-specific settings are documented under [Context Window Management](#context-window-management).
 
 Provider defaults and adapter behavior are defined in one capability catalog. The catalog distinguishes streaming, Usage, forced tool selection, thinking mode, reasoning continuation, and prompt-cache accounting from model context limits. Run `npm run dev -- --doctor` to inspect the effective provider, model, endpoint, credential source, capabilities, dependencies, verification commands, and context budgets without making an API request or printing credential values. Add `--json` for machine-readable output.
 
-Plaintext `apiKey` values in `.codepilot.json` are rejected. Use the provider environment variable instead; `/doctor` reports the unsafe file setting without echoing its value.
+Plaintext `apiKey` values in `.codepilot.json` are rejected. Use `codepilot auth set`, a user-level helper, or the Provider environment variable instead; `/doctor` reports the unsafe file setting without echoing its value.
 
 Provider requests retry transient network failures, timeouts, malformed protocol responses, HTTP 408/425/429, and selected 5xx responses with bounded exponential backoff. `Retry-After` is honored up to 30 seconds. Client errors such as HTTP 400 are not retried, and `Ctrl+C` cancels both an active request and a pending retry delay. Defaults can be adjusted per project:
 
@@ -358,7 +384,7 @@ When history exceeds the budget, CodePilot automatically compacts omitted older 
 .codepilot/sessions/<session-id>.summary.md
 ```
 
-Compaction uses `deepseek-v4-flash` through `DEEPSEEK_API_KEY` to produce structured Markdown summaries. If the key is missing or the API call fails, CodePilot falls back to a local mechanical summary so the session can continue.
+Compaction uses `deepseek-v4-flash` through the same DeepSeek credential resolver (environment variable, user helper, or user store) to produce structured Markdown summaries. If the credential is missing or the API call fails, CodePilot falls back to a local mechanical summary so the session can continue.
 Summaries are isolated per session so resuming or compacting one task cannot leak its compressed context into another. When an older workspace is resumed, the legacy `.codepilot/session-summary.md` is moved once into that resumed session.
 
 Useful commands:
