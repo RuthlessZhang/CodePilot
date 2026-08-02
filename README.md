@@ -61,7 +61,7 @@ $env:ANTHROPIC_API_KEY="..."
 npm run dev -- --provider anthropic
 ```
 
-CodePilot also reads `.codepilot.json` for `provider`, `model`, `baseUrl`, `maxSteps`, `maxToolCalls`, `headlessMaxRuntimeMs`, `contextBudgetTokens`, `autoVerify`, `maxVerificationAttempts`, `providerMaxRetries`, `providerRequestTimeoutMs`, `shellTimeoutMs`, `shellMaxOutputChars`, `autoApprove`, `permissions`, `runtimeAudit`, `runtimeAuditPath`, `runtimeHookTimeoutMs`, and `protectedPaths`. Keep API keys in environment variables.
+CodePilot also reads `.codepilot.json` for `provider`, `model`, `baseUrl`, runtime limits, context and memory budgets, verification, provider retry, Shell limits, permissions, runtime auditing, and protected paths. Keep API keys in environment variables. The context-specific settings are documented under [Context Window Management](#context-window-management).
 
 Provider requests retry transient network failures, timeouts, malformed protocol responses, HTTP 408/425/429, and selected 5xx responses with bounded exponential backoff. `Retry-After` is honored up to 30 seconds. Client errors such as HTTP 400 are not retried, and `Ctrl+C` cancels both an active request and a pending retry delay. Defaults can be adjusted per project:
 
@@ -99,8 +99,8 @@ Provider requests retry transient network failures, timeouts, malformed protocol
 /init [--force]       Create or regenerate AGENTS.md
 /index                Build .codepilot/index.json
 /check                Run detected verification commands
-/remember <note>      Save a project memory note
-/memory               Show .codepilot/memory.md
+/remember [topic:] <note> Save a durable topic memory
+/memory [query]       Show the memory index and relevant topics
 /rules [query]        Show all instructions or rules selected for a query
 /context              Show context budget report
 /compact              Summarize old messages and keep recent context
@@ -164,12 +164,13 @@ Headless permissions fail closed: an `ask` decision is denied instead of waiting
 
 ## Instructions and Memory
 
-CodePilot loads stable project instructions into the system context from:
+CodePilot loads stable project instructions into named system-context sections from:
 
 ```text
 AGENTS.md
 CLAUDE.md
 .codepilot/memory.md
+.codepilot/memory/<topic>.md
 ```
 
 CodePilot also reads `.codepilot/rules/*.md`, but those rule files are selected on demand. Each agent turn scores rule files against the current user request using file names, headings, content keywords, and small built-in synonym groups. Only the most relevant rules are injected into the model context.
@@ -189,16 +190,20 @@ Use the public API rules in @README.md.
 Follow migration notes in @docs/migrations.md.
 ```
 
-Save durable project memory:
+Memory v2 keeps a concise index in `.codepilot/memory.md` and durable notes in topic files. Legacy single-file memory is migrated to `.codepilot/memory/general.md` on the next write. The index is always available; only topic files relevant to the current request are injected.
+
+Save and query durable project memory:
 
 ```text
-/remember Prefer small focused edits in provider adapters.
+/remember architecture: Keep provider adapters behind one interface.
+/remember commands: Run npm test before release.
 /memory
+/memory provider architecture
 /rules
 /rules testing
 ```
 
-Memory is stored in `.codepilot/memory.md` and loaded on future turns. Use `AGENTS.md` or `.codepilot/rules/*.md` for stable team rules; use memory for smaller learned project notes.
+The agent can also call the read-only `memory_read` tool or request an approved `memory_write`. It is instructed to store only durable architecture decisions, commands, debugging lessons, and user preferences—not transient task progress. Use `AGENTS.md` or `.codepilot/rules/*.md` for stable team rules.
 
 ## File References
 
@@ -248,15 +253,32 @@ AGENTS.md / CLAUDE.md / memory
 rules selected from .codepilot/rules/*.md
 recent conversation messages
 tool results
+tool definitions
 ```
 
-The default budget is `64000` estimated tokens. Configure it in `.codepilot.json`:
+The input budget is model-aware:
+
+```text
+effective input budget = min(contextBudgetTokens,
+  contextWindowTokens - maxOutputTokens - contextSafetyMarginTokens)
+```
+
+Known models use local context profiles; unknown model names use conservative provider fallbacks. The default working input cap is `128000` estimated tokens even when the model window is larger. Explicit project settings override the detected profile and are clamped to a valid window. For example:
 
 ```json
 {
-  "contextBudgetTokens": 64000
+  "contextBudgetTokens": 128000,
+  "maxOutputTokens": 8192,
+  "contextSafetyMarginTokens": 4096,
+  "toolResultMaxTokens": 1200,
+  "oldToolResultMaxTokens": 160,
+  "memoryIndexMaxTokens": 800,
+  "memoryTopicMaxTokens": 800,
+  "memoryTopicLimit": 3
 }
 ```
+
+`contextWindowTokens` can be set when using a model that has no built-in profile. Tool definitions are counted before message packing. Older tool results are compacted more aggressively than the two most recent results, and named system sections expose their individual token costs in `/context` and runtime events.
 
 When history exceeds the budget, CodePilot automatically compacts omitted older messages into:
 
@@ -391,6 +413,8 @@ const agent = new Agent({ ...options, runtimeEvents });
 - `lsp` (TypeScript/JavaScript/Python symbols, definitions, references, hover, diagnostics)
 - `todo_read`
 - `todo_write`
+- `memory_read` (index plus query-relevant topic memory)
+- `memory_write` (approved durable topic memory)
 - `project_index`
 - `impact_analysis` (pre-edit targets, callers, dependents, tests, checks, and edit plan)
 - `code_graph` (symbol/call search and per-file import relationships)

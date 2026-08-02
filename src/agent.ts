@@ -1,8 +1,9 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { invalidateCodeGraph } from "./code-graph.js";
-import { formatContextReport, packContext, type ContextReport } from "./context-manager.js";
-import { loadInstructions } from "./instructions.js";
+import { formatContextReport, packContext, type ContextReport, type SystemContext } from "./context-manager.js";
+import { loadInstructionBlocks } from "./instructions.js";
+import type { MemoryLoadOptions } from "./memory.js";
 import { readProjectIndex, summarizeProjectIndex } from "./project.js";
 import { appendSessionSummary, migrateLegacySessionSummary, readSessionSummary } from "./session-summary.js";
 import { summarizeWithDeepSeekFlash, type SummaryResult } from "./summarizer.js";
@@ -34,6 +35,14 @@ export type AgentOptions = {
   maxSteps: number;
   maxToolCalls?: number;
   contextBudgetTokens: number;
+  contextWindowTokens?: number;
+  maxOutputTokens?: number;
+  contextSafetyMarginTokens?: number;
+  toolResultMaxTokens?: number;
+  oldToolResultMaxTokens?: number;
+  memoryIndexMaxTokens?: number;
+  memoryTopicMaxTokens?: number;
+  memoryTopicLimit?: number;
   mode: AgentMode;
   autoVerify?: boolean;
   maxVerificationAttempts?: number;
@@ -135,11 +144,14 @@ export class Agent {
     for (let step = 0; step < this.options.maxSteps; step++) {
       signal.throwIfAborted();
       if (this.activeRunStats) this.activeRunStats.modelSteps = step + 1;
-      let packed = packContext(
-        await system(this.options.root, this.options.mode, this.sessionId, prompt, this.workspaceContext),
-        this.messages,
-        this.options.contextBudgetTokens,
-      );
+      let packed = this.pack(await system(
+        this.options.root,
+        this.options.mode,
+        this.sessionId,
+        prompt,
+        this.workspaceContext,
+        memoryOptions(this.options),
+      ));
       if (packed.report.omittedMessages > 0) {
         const oldMessages = this.messages.slice(0, packed.report.omittedMessages);
         const summary = await summarizeWithDeepSeekFlash(oldMessages);
@@ -152,16 +164,23 @@ export class Agent {
         );
         this.messages = this.messages.slice(packed.report.omittedMessages);
         await this.save();
-        packed = packContext(
-          await system(this.options.root, this.options.mode, this.sessionId, prompt, this.workspaceContext),
-          this.messages,
-          this.options.contextBudgetTokens,
-        );
+        packed = this.pack(await system(
+          this.options.root,
+          this.options.mode,
+          this.sessionId,
+          prompt,
+          this.workspaceContext,
+          memoryOptions(this.options),
+        ));
       }
       this.lastContextReport = packed.report;
       await this.emitRuntime(runId, "context.prepared", {
         step: step + 1,
         budgetTokens: packed.report.budgetTokens,
+        contextWindowTokens: packed.report.contextWindowTokens,
+        outputReserveTokens: packed.report.outputReserveTokens,
+        safetyMarginTokens: packed.report.safetyMarginTokens,
+        toolDefinitionTokens: packed.report.toolDefinitionTokens,
         totalTokens: packed.report.totalTokens,
         keptMessages: packed.report.keptMessages,
         omittedMessages: packed.report.omittedMessages,
@@ -382,17 +401,31 @@ export class Agent {
   }
 
   async contextReport() {
-    const packed = packContext(
-      await system(this.options.root, this.options.mode, this.sessionId),
-      this.messages,
-      this.options.contextBudgetTokens,
-    );
+    const packed = this.pack(await system(
+      this.options.root,
+      this.options.mode,
+      this.sessionId,
+      undefined,
+      "",
+      memoryOptions(this.options),
+    ));
     this.lastContextReport = packed.report;
     return formatContextReport(packed.report);
   }
 
   private async save() {
     await saveSession(this.options.root, this.sessionId, this.sessionCreatedAt, this.messages);
+  }
+
+  private pack(systemContext: SystemContext) {
+    return packContext(systemContext, this.messages, this.options.contextBudgetTokens, {
+      contextWindowTokens: this.options.contextWindowTokens,
+      outputReserveTokens: this.options.maxOutputTokens,
+      safetyMarginTokens: this.options.contextSafetyMarginTokens,
+      toolDefinitions: this.tools.definitions(),
+      toolResultMaxTokens: this.options.toolResultMaxTokens,
+      oldToolResultMaxTokens: this.options.oldToolResultMaxTokens,
+    });
   }
 
   private async emitRuntime<Name extends RuntimeEventName>(
@@ -486,12 +519,24 @@ function withoutEmptyToolCalls(message: Message): Message {
   return { role: "assistant", content: message.content };
 }
 
-async function system(root: string, mode: AgentMode, sessionId: string, query?: string, workspaceContext = "") {
+function memoryOptions(options: AgentOptions): MemoryLoadOptions {
+  return {
+    indexMaxTokens: options.memoryIndexMaxTokens,
+    topicMaxTokens: options.memoryTopicMaxTokens,
+    topicLimit: options.memoryTopicLimit,
+  };
+}
+
+async function system(
+  root: string,
+  mode: AgentMode,
+  sessionId: string,
+  query?: string,
+  workspaceContext = "",
+  memoryLoadOptions: MemoryLoadOptions = {},
+) {
   const index = await readProjectIndex(root);
-  const indexSummary = index
-    ? `\n\nProject index:\n${summarizeProjectIndex(index)}`
-    : "";
-  const instructions = await loadInstructions(root, query);
+  const instructionBlocks = await loadInstructionBlocks(root, query, memoryLoadOptions);
   const summary = await readSessionSummary(root, sessionId);
 
   const modeRules =
@@ -499,11 +544,23 @@ async function system(root: string, mode: AgentMode, sessionId: string, query?: 
       ? "You are in PLAN mode. Inspect and reason, but do not modify files or run commands. If implementation is needed, produce a concrete plan."
       : "You are in BUILD mode. You may modify files and run commands after permission checks.";
 
-  return `You are CodePilot, a careful coding agent in ${root}.
+  const base = `You are CodePilot, a careful coding agent in ${root}.
 ${modeRules}
 Inspect before editing, stay in the workspace, preserve user changes, and run relevant tests.
 Before editing code, use the pre-edit impact analysis when available; confirm uncertain callers or dynamic relationships with impact_analysis, code_graph, LSP, or search.
 For multi-step coding tasks, use todo_write to keep an explicit task list and update it as work progresses.
 Prefer apply_patch for code edits; use write_file only when creating or replacing a whole file is clearer.
-Never claim validation not performed.${indexSummary}${workspaceContext ? `\n\n${workspaceContext}` : ""}${summary ? `\n\nSession summary:\n${summary}` : ""}${instructions ? `\n\n${instructions}` : ""}`;
+Use memory_write only for durable architecture decisions, commands, debugging lessons, or user preferences; never store transient task state.
+Never claim validation not performed.`;
+  const sections = [
+    { name: "base", content: base },
+    ...(summary ? [{ name: "sessionSummary", content: `Session summary:\n${summary}` }] : []),
+    ...instructionBlocks.map((block) => ({
+      name: block.kind,
+      content: `Instructions from ${block.source}:\n${block.content}`,
+    })),
+    ...(workspaceContext ? [{ name: "workspaceContext", content: workspaceContext }] : []),
+    ...(index ? [{ name: "projectIndex", content: `Project index:\n${summarizeProjectIndex(index)}` }] : []),
+  ];
+  return { text: sections.map((section) => section.content).join("\n\n"), sections };
 }

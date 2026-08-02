@@ -117,3 +117,13 @@ test("validates and parses Anthropic content blocks", async () => {
   assert.equal(result.text, "inspect");
   assert.deepEqual(result.toolCalls, [{ id: "tool-1", name: "read_file", arguments: { path: "README.md" } }]);
 });
+
+test("sends the configured output limit to provider APIs", async () => {
+  const bodies: Array<Record<string, unknown>> = [];
+  const fetchImpl = (async (_url: unknown, init?: RequestInit) => {
+    bodies.push(JSON.parse(String(init?.body)));
+    return json(openAIMessage());
+  }) as typeof fetch;
+  await new OpenAIProvider(options(fetchImpl, { maxOutputTokens: 1_234 })).complete(input);
+  assert.equal(bodies[0]?.max_tokens, 1_234);
+});

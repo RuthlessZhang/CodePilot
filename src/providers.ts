@@ -5,6 +5,7 @@ export type ProviderOptions = ProviderRequestOptions & {
   apiKey: string;
   baseUrl: string;
   model: string;
+  maxOutputTokens?: number;
   extraBody?: Record<string, unknown>;
 };
 
@@ -145,6 +146,7 @@ export class OpenAIProvider implements Provider {
         },
         body: JSON.stringify({
           model: this.options.model,
+          max_tokens: this.options.maxOutputTokens ?? 8_192,
           messages,
           tools: input.tools.map((tool) => ({
             type: "function",
@@ -225,7 +227,7 @@ export class AnthropicProvider implements Provider {
         },
         body: JSON.stringify({
           model: this.options.model,
-          max_tokens: 8192,
+          max_tokens: this.options.maxOutputTokens ?? 8_192,
           system: input.system,
           messages,
           tools: input.tools.map((tool) => ({

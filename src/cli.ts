@@ -9,7 +9,7 @@ import { runHeadless } from "./headless.js";
 import { initProject } from "./init.js";
 import { loadInstructions, loadRelevantRules } from "./instructions.js";
 import { loadConfig } from "./config.js";
-import { readMemory, remember } from "./memory.js";
+import { loadRelevantMemory, readMemory, remember } from "./memory.js";
 import { saveProjectIndex, summarizeProjectIndex } from "./project.js";
 import { approval, nonInteractiveApproval } from "./permissions.js";
 import { readTodos, summarizeTodos } from "./todo.js";
@@ -69,8 +69,8 @@ function help() {
 /init [--force]       Create or regenerate AGENTS.md
 /index                Build .codepilot/index.json
 /check                Run detected verification commands
-/remember <note>      Save a project memory note
-/memory               Show .codepilot/memory.md
+/remember [topic:] <note> Save a durable topic memory
+/memory [query]       Show the memory index and relevant topics
 /rules [query]        Show all instructions or rules selected for a query
 /context              Show context budget report
 /compact              Summarize old messages and keep recent context
@@ -104,6 +104,7 @@ async function main() {
     apiKey: config.apiKey,
     baseUrl: config.baseUrl,
     model: config.model,
+    maxOutputTokens: config.maxOutputTokens,
     maxRetries: config.providerMaxRetries,
     requestTimeoutMs: config.providerRequestTimeoutMs,
   };
@@ -150,6 +151,14 @@ async function main() {
     maxSteps: config.maxSteps,
     maxToolCalls: config.maxToolCalls,
     contextBudgetTokens: config.contextBudgetTokens,
+    contextWindowTokens: config.contextWindowTokens,
+    maxOutputTokens: config.maxOutputTokens,
+    contextSafetyMarginTokens: config.contextSafetyMarginTokens,
+    toolResultMaxTokens: config.toolResultMaxTokens,
+    oldToolResultMaxTokens: config.oldToolResultMaxTokens,
+    memoryIndexMaxTokens: config.memoryIndexMaxTokens,
+    memoryTopicMaxTokens: config.memoryTopicMaxTokens,
+    memoryTopicLimit: config.memoryTopicLimit,
     autoVerify: config.autoVerify,
     maxVerificationAttempts: config.maxVerificationAttempts,
     mode,
@@ -294,8 +303,18 @@ async function main() {
         console.log(`Remembered: ${await remember(root, question.slice("/remember ".length))}`);
         continue;
       }
-      if (question === "/memory") {
-        console.log((await readMemory(root)) || "(no memory yet)");
+      if (question === "/memory" || question.startsWith("/memory ")) {
+        const query = question.slice("/memory".length).trim();
+        const blocks = query
+          ? await loadRelevantMemory(root, query, {
+              indexMaxTokens: config.memoryIndexMaxTokens,
+              topicMaxTokens: config.memoryTopicMaxTokens,
+              topicLimit: config.memoryTopicLimit,
+            })
+          : [];
+        console.log(query
+          ? blocks.map((block) => `Memory from ${block.source}:\n${block.content}`).join("\n\n") || "(no memory yet)"
+          : (await readMemory(root)) || "(no memory yet)");
         continue;
       }
       if (question === "/rules") {

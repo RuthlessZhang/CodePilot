@@ -1,19 +1,20 @@
 import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { findFileReferences } from "./context.js";
-import { readMemory } from "./memory.js";
+import { loadRelevantMemory, type MemoryLoadOptions } from "./memory.js";
 import { resolveInWorkspace } from "./tools.js";
 
 const MAX_IMPORT_CHARS = 8000;
 const MAX_IMPORT_DEPTH = 2;
 const DEFAULT_RULE_LIMIT = 5;
 
-type InstructionBlock = {
+export type InstructionBlock = {
   source: string;
   content: string;
+  kind: "instructions" | "rules" | "memory";
 };
 
-export type RuleBlock = InstructionBlock & {
+export type RuleBlock = Omit<InstructionBlock, "kind"> & {
   score: number;
 };
 
@@ -73,16 +74,17 @@ async function ruleFiles(root: string) {
 }
 
 function tokenize(text: string) {
+  const stopWords = new Set(["a", "an", "and", "for", "in", "of", "on", "or", "the", "to", "with"]);
   return Array.from(
     new Set(
       text
         .toLowerCase()
         .match(/[a-z0-9_./-]+|[\u4e00-\u9fff]/g) ?? [],
     ),
-  );
+  ).filter((term) => !stopWords.has(term));
 }
 
-function expandQueryTerms(terms: string[]) {
+function expandQueryTerms(query: string) {
   const groups = [
     ["test", "tests", "testing", "check", "verify", "build", "lint", "测试", "检查", "验证", "构建"],
     ["architecture", "arch", "structure", "design", "layer", "架构", "结构", "设计", "分层"],
@@ -92,10 +94,12 @@ function expandQueryTerms(terms: string[]) {
     ["security", "permission", "approval", "risk", "safe", "安全", "权限", "审批", "风险"],
     ["release", "publish", "version", "changelog", "发布", "版本"],
   ];
+  const normalizedQuery = query.toLowerCase();
+  const terms = new Set(tokenize(query));
   const expanded = new Set(terms);
-  for (const term of terms) {
-    for (const group of groups) {
-      if (group.includes(term)) group.forEach((item) => expanded.add(item));
+  for (const group of groups) {
+    if (group.some((item) => terms.has(item) || normalizedQuery.includes(item))) {
+      group.forEach((item) => expanded.add(item));
     }
   }
   return [...expanded];
@@ -110,7 +114,7 @@ function heading(content: string) {
 }
 
 function scoreRule(query: string, source: string, content: string) {
-  const terms = expandQueryTerms(tokenize(query));
+  const terms = expandQueryTerms(query);
   if (!terms.length) return 0;
 
   const title = heading(content);
@@ -163,7 +167,7 @@ async function loadAllRules(root: string): Promise<RuleBlock[]> {
   return rules;
 }
 
-export async function loadInstructions(root: string, query?: string) {
+export async function loadInstructionBlocks(root: string, query?: string, memoryOptions: MemoryLoadOptions = {}) {
   const files = [
     path.join(root, "AGENTS.md"),
     path.join(root, "CLAUDE.md"),
@@ -176,6 +180,7 @@ export async function loadInstructions(root: string, query?: string) {
     blocks.push({
       source: path.relative(root, file),
       content: await expandImports(root, path.dirname(file), content),
+      kind: "instructions",
     });
   }
 
@@ -186,13 +191,19 @@ export async function loadInstructions(root: string, query?: string) {
     blocks.push({
       source: rule.source,
       content: rule.content,
+      kind: "rules",
     });
   }
 
-  const memory = await readMemory(root);
-  if (memory.trim()) {
-    blocks.push({ source: ".codepilot/memory.md", content: memory });
+  for (const memory of await loadRelevantMemory(root, query, memoryOptions)) {
+    blocks.push({ source: memory.source, content: memory.content, kind: "memory" });
   }
+
+  return blocks;
+}
+
+export async function loadInstructions(root: string, query?: string, memoryOptions: MemoryLoadOptions = {}) {
+  const blocks = await loadInstructionBlocks(root, query, memoryOptions);
 
   if (!blocks.length) return "";
 

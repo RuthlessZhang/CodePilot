@@ -1,8 +1,9 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import { resolveModelContextProfile, type ProviderName } from "./model-context.js";
 import type { Risk } from "./types.js";
 
-export type ProviderName = "openai" | "anthropic" | "deepseek";
+export type { ProviderName } from "./model-context.js";
 export type PermissionDecision = "allow" | "ask" | "deny";
 export type PermissionPolicy = Record<string, PermissionDecision>;
 
@@ -14,7 +15,15 @@ export type Config = {
   maxSteps: number;
   maxToolCalls: number;
   headlessMaxRuntimeMs: number;
+  contextWindowTokens: number;
   contextBudgetTokens: number;
+  maxOutputTokens: number;
+  contextSafetyMarginTokens: number;
+  toolResultMaxTokens: number;
+  oldToolResultMaxTokens: number;
+  memoryIndexMaxTokens: number;
+  memoryTopicMaxTokens: number;
+  memoryTopicLimit: number;
   autoVerify: boolean;
   maxVerificationAttempts: number;
   providerMaxRetries: number;
@@ -105,16 +114,37 @@ export async function loadConfig(
 
   const provider = overrides.provider ?? fileConfig.provider ?? inferProvider();
   const providerDefaults = defaults[provider];
+  const model =
+    overrides.model ??
+    fileConfig.model ??
+    process.env[providerDefaults.modelEnv] ??
+    providerDefaults.model;
+  const contextProfile = resolveModelContextProfile(provider, model);
+  const contextWindowTokens = boundedInteger(
+    overrides.contextWindowTokens ?? fileConfig.contextWindowTokens,
+    contextProfile.contextWindowTokens,
+    8_192,
+    2_000_000,
+  );
+  const maxOutputTokens = boundedInteger(
+    overrides.maxOutputTokens ?? fileConfig.maxOutputTokens,
+    Math.min(8_192, contextProfile.modelMaxOutputTokens),
+    256,
+    Math.max(256, Math.min(contextProfile.modelMaxOutputTokens, contextWindowTokens - 4_096)),
+  );
+  const contextSafetyMarginTokens = boundedInteger(
+    overrides.contextSafetyMarginTokens ?? fileConfig.contextSafetyMarginTokens,
+    Math.min(16_384, Math.max(2_048, Math.floor(contextWindowTokens * 0.02))),
+    512,
+    Math.max(512, contextWindowTokens - maxOutputTokens - 2_000),
+  );
+  const maximumInputBudget = Math.max(2_000, contextWindowTokens - maxOutputTokens - contextSafetyMarginTokens);
   const runtimeAudit = overrides.runtimeAudit ?? fileConfig.runtimeAudit;
   const runtimeAuditPath = overrides.runtimeAuditPath ?? fileConfig.runtimeAuditPath;
 
   return {
     provider,
-    model:
-      overrides.model ??
-      fileConfig.model ??
-      process.env[providerDefaults.modelEnv] ??
-      providerDefaults.model,
+    model,
     apiKey: fileConfig.apiKey ?? process.env[providerDefaults.apiKeyEnv],
     baseUrl:
       fileConfig.baseUrl ??
@@ -128,7 +158,45 @@ export async function loadConfig(
       1_000,
       86_400_000,
     ),
-    contextBudgetTokens: fileConfig.contextBudgetTokens ?? 64000,
+    contextWindowTokens,
+    contextBudgetTokens: boundedInteger(
+      overrides.contextBudgetTokens ?? fileConfig.contextBudgetTokens,
+      Math.min(128_000, maximumInputBudget),
+      2_000,
+      maximumInputBudget,
+    ),
+    maxOutputTokens,
+    contextSafetyMarginTokens,
+    toolResultMaxTokens: boundedInteger(
+      overrides.toolResultMaxTokens ?? fileConfig.toolResultMaxTokens,
+      1_200,
+      100,
+      16_384,
+    ),
+    oldToolResultMaxTokens: boundedInteger(
+      overrides.oldToolResultMaxTokens ?? fileConfig.oldToolResultMaxTokens,
+      160,
+      50,
+      4_096,
+    ),
+    memoryIndexMaxTokens: boundedInteger(
+      overrides.memoryIndexMaxTokens ?? fileConfig.memoryIndexMaxTokens,
+      800,
+      100,
+      8_192,
+    ),
+    memoryTopicMaxTokens: boundedInteger(
+      overrides.memoryTopicMaxTokens ?? fileConfig.memoryTopicMaxTokens,
+      800,
+      100,
+      8_192,
+    ),
+    memoryTopicLimit: boundedInteger(
+      overrides.memoryTopicLimit ?? fileConfig.memoryTopicLimit,
+      3,
+      0,
+      20,
+    ),
     autoVerify: fileConfig.autoVerify ?? true,
     maxVerificationAttempts: fileConfig.maxVerificationAttempts ?? 3,
     providerMaxRetries: boundedInteger(overrides.providerMaxRetries ?? fileConfig.providerMaxRetries, 2, 0, 5),

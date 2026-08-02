@@ -5,7 +5,17 @@ export type RuntimeEventDataMap = {
   "run.completed": { responseLength: number; modelSteps: number; toolCalls: number; verificationStatus: string };
   "run.failed": { error: string; errorName: string };
   "run.cancelled": { reason: string };
-  "context.prepared": { step: number; budgetTokens: number; totalTokens: number; keptMessages: number; omittedMessages: number };
+  "context.prepared": {
+    step: number;
+    budgetTokens: number;
+    contextWindowTokens?: number;
+    outputReserveTokens?: number;
+    safetyMarginTokens?: number;
+    toolDefinitionTokens?: number;
+    totalTokens: number;
+    keptMessages: number;
+    omittedMessages: number;
+  };
   "model.requested": { step: number; messageCount: number; toolCount: number };
   "model.responded": { step: number; textLength: number; toolCalls: string[] };
   "tool.requested": { name: string; risk?: Risk; args: Record<string, unknown> };

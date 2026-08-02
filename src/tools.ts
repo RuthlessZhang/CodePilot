@@ -6,6 +6,7 @@ import { buildCodeGraph, codeGraphSummary, queryCodeGraph } from "./code-graph.j
 import { analyzeImpact } from "./impact-analysis.js";
 import { buildProjectIndex, summarizeProjectIndex } from "./project.js";
 import { normalizeTodos, readTodos, summarizeTodos, writeTodos } from "./todo.js";
+import { loadRelevantMemory, remember } from "./memory.js";
 import { closeLspServers, queryLsp } from "./lsp.js";
 import type { Tool } from "./types.js";
 
@@ -155,6 +156,35 @@ export function createTools(root: string, hooks: ToolHooks = {}): Tool[] {
       },
       async execute(args) {
         return await writeTodos(root, normalizeTodos(args.todos));
+      },
+    },
+    {
+      risk: "read",
+      definition: {
+        name: "memory_read",
+        description: "Read the concise project memory index and topic files relevant to a query.",
+        inputSchema: schema({ query: { type: "string" } }),
+      },
+      async execute(args) {
+        const query = typeof args.query === "string" ? args.query : "";
+        const blocks = await loadRelevantMemory(root, query);
+        return blocks.length
+          ? blocks.map((block) => `Memory from ${block.source}:\n${block.content}`).join("\n\n")
+          : "No project memory";
+      },
+    },
+    {
+      risk: "write",
+      definition: {
+        name: "memory_write",
+        description: "Save a durable project fact after normal write approval. Use only architecture, commands, debugging, preferences, or general knowledge—not transient task state.",
+        inputSchema: schema({
+          topic: { type: "string", enum: ["architecture", "commands", "debugging", "preferences", "general"] },
+          note: { type: "string" },
+        }, ["topic", "note"]),
+      },
+      async execute(args) {
+        return await remember(root, stringArg(args.note), stringArg(args.topic));
       },
     },
     {
