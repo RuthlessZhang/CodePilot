@@ -342,12 +342,18 @@ export async function queryLsp(
   try {
     signal?.throwIfAborted();
     await entry.initialized;
-    const version = (entry.documentVersions.get(uri) ?? 0) + 1;
+    const previousVersion = entry.documentVersions.get(uri) ?? 0;
+    let version = previousVersion + 1;
+    const reopenForDiagnostics = input.operation === "diagnostics" && previousVersion > 0;
+    if (reopenForDiagnostics) {
+      client.notify("textDocument/didClose", { textDocument: { uri } });
+      version = 1;
+    }
     entry.documentVersions.set(uri, version);
     const diagnosticsPromise = input.operation === "diagnostics"
       ? waitForDiagnostics(client, uri, version, signal)
       : undefined;
-    if (version === 1) {
+    if (previousVersion === 0 || reopenForDiagnostics) {
       client.notify("textDocument/didOpen", {
         textDocument: { uri, languageId: server.languageId, version, text: content },
       });
@@ -366,7 +372,7 @@ export async function queryLsp(
     let result: unknown;
     if (input.operation === "diagnostics") {
       result = await diagnosticsPromise;
-      if (version > 1 && !hasDiagnostics(result)) {
+      if (previousVersion > 0 && !hasDiagnostics(result)) {
         const retryVersion = version + 1;
         entry.documentVersions.set(uri, retryVersion);
         const retry = waitForDiagnostics(client, uri, retryVersion, signal);
