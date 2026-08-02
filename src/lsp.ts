@@ -197,6 +197,11 @@ function normalizeResult(value: unknown, root: string, key = ""): unknown {
   return Object.fromEntries(Object.entries(record).map(([name, item]) => [name, normalizeResult(item, root, name)]));
 }
 
+function hasDiagnostics(value: unknown) {
+  return Array.isArray((value as { diagnostics?: unknown } | undefined)?.diagnostics)
+    && ((value as { diagnostics: unknown[] }).diagnostics.length > 0);
+}
+
 function waitForDiagnostics(client: LspClient, uri: string, expectedVersion: number, signal?: AbortSignal, timeoutMs = 8000) {
   const sameDocument = (candidate: unknown) => {
     if (typeof candidate !== "string") return false;
@@ -361,6 +366,16 @@ export async function queryLsp(
     let result: unknown;
     if (input.operation === "diagnostics") {
       result = await diagnosticsPromise;
+      if (version > 1 && !hasDiagnostics(result)) {
+        const retryVersion = version + 1;
+        entry.documentVersions.set(uri, retryVersion);
+        const retry = waitForDiagnostics(client, uri, retryVersion, signal);
+        client.notify("textDocument/didChange", {
+          textDocument: { uri, version: retryVersion },
+          contentChanges: [{ text: content }],
+        });
+        result = await retry;
+      }
     } else if (input.operation === "workspaceSymbols") {
       result = await client.request("workspace/symbol", { query: input.query ?? "" });
     } else if (input.operation === "documentSymbols") {
