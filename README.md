@@ -139,6 +139,7 @@ Trace files never contain API keys, HTTP headers, system prompts, user messages,
 /memory [query]       Show the memory index and relevant topics
 /rules [query]        Show all instructions or rules selected for a query
 /context              Show context budget report
+/usage                Show usage for the last agent run
 /compact              Summarize old messages and keep recent context
 /todo                 Show current task list
 /undo                 Restore files changed by the previous agent run
@@ -155,6 +156,12 @@ Plan mode blocks write and execute tools. Build mode allows them after approval.
 CodePilot prints each tool lifecycle event (`[tool:start]`, `[tool:completed]`, or `[tool:failed]`). Shell, Git status, and Git diff output is streamed as it arrives. Shell results include exit code, duration, timeout, and truncation metadata. Defaults are a 120-second timeout and a 1 MB captured-output limit, configurable with `shellTimeoutMs` and `shellMaxOutputChars`; an individual `shell` call may set `timeout_ms`. Cancellation and timeout terminate the spawned process tree. Run long-lived development servers such as `npm run dev` in a separate terminal.
 
 Press `Ctrl+C` while an agent task is running to cancel the active model request or Shell command. In interactive mode, CodePilot returns to the prompt after cancellation; pressing `Ctrl+C` while idle exits the CLI.
+
+### Crash Recovery
+
+During an active run, CodePilot atomically updates `.codepilot/runs/checkpoints/<session-id>.json` before model calls, tool execution, and verification. Checkpoints contain only IDs, phase names, counters, timestamps, and tool names—never prompts, tool arguments, model text, code, or credentials. User messages, assistant tool requests, and each tool result are persisted independently instead of waiting for the whole tool batch.
+
+After an unclean process exit, resume the affected session with `--resume` or `--session <id>`. If a tool was active but no durable result exists, CodePilot adds a synthetic tool result marking its outcome as unknown and instructing the next model turn to inspect the workspace. It does not automatically replay the tool. Consistent session history is retained, the stale checkpoint is cleared, and the CLI prints a `[recovery]` notice. Normal completion and safe pre-tool cancellation remove the checkpoint automatically.
 
 ## Automatic Verification
 

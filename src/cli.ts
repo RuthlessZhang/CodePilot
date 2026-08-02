@@ -244,6 +244,12 @@ async function main() {
   } else if (args.includes("--resume") || args.includes("--continue")) {
     if (!(await agent.load())) console.log("No previous session found for this workspace; starting a new one.");
   }
+  const recovery = agent.getLastRecoveryNotice();
+  if (recovery) {
+    const notice = `[recovery] ${recovery.message}`;
+    if (headless) console.error(notice);
+    else console.log(notice);
+  }
 
   const prompt = promptFromArgs(args);
   if (!prompt && headless) throw Error("--headless requires a task prompt");

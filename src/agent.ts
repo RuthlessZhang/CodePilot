@@ -5,6 +5,7 @@ import { formatContextReport, packContext, type ContextReport, type SystemContex
 import { loadInstructionBlocks } from "./instructions.js";
 import type { MemoryLoadOptions } from "./memory.js";
 import { readProjectIndex, summarizeProjectIndex } from "./project.js";
+import { clearRunCheckpoint, readRunCheckpoint, writeRunCheckpoint, type RunCheckpoint, type RunCheckpointPhase } from "./run-checkpoint.js";
 import { appendSessionSummary, migrateLegacySessionSummary, readSessionSummary } from "./session-summary.js";
 import { summarizeWithDeepSeekFlash, type SummaryResult } from "./summarizer.js";
 import { selectWorkspaceContext } from "./workspace-context.js";
@@ -32,6 +33,14 @@ export type AgentRunStats = {
   usageEstimatedSteps: number;
   verificationAttempts: number;
   verificationStatus: "not_run" | "passed" | "failed" | "skipped";
+};
+
+export type RunRecoveryNotice = {
+  runId: string;
+  phase: RunCheckpointPhase;
+  updatedAt: string;
+  recoveredToolCalls: number;
+  message: string;
 };
 
 export class AgentBudgetError extends Error {
@@ -96,6 +105,7 @@ export class Agent {
   private activeController?: AbortController;
   private activeRunStats?: AgentRunStats;
   private lastRunStats?: AgentRunStats;
+  private lastRecoveryNotice?: RunRecoveryNotice;
 
   setMode(mode: AgentMode) {
     this.options.mode = mode;
@@ -113,6 +123,10 @@ export class Agent {
     return this.lastRunStats ? { ...this.lastRunStats } : undefined;
   }
 
+  getLastRecoveryNotice() {
+    return this.lastRecoveryNotice ? { ...this.lastRecoveryNotice } : undefined;
+  }
+
   async run(prompt: string) {
     if (this.activeController) throw Error("Agent is already running");
     const controller = new AbortController();
@@ -121,6 +135,7 @@ export class Agent {
     this.activeController = controller;
     this.activeRunStats = emptyRunStats();
     try {
+      await this.checkpoint(runId, "starting");
       await this.emitRuntime(runId, "run.started", { prompt, mode: this.options.mode }, controller.signal);
       const response = await this.runWithSignal(prompt, controller.signal, runId);
       const stats = this.activeRunStats;
@@ -144,7 +159,13 @@ export class Agent {
       return response;
     } catch (error) {
       if ((error as Error).name === "AbortError") {
-        this.messages = this.messages.slice(0, startingMessageCount);
+        const checkpoint = await readRunCheckpoint(this.options.root, this.sessionId);
+        if (checkpoint && (checkpoint.progress.toolCalls > 0 || checkpoint.phase === "tool" || checkpoint.phase === "verification")) {
+          await this.reconcileInterruptedRun(checkpoint);
+        } else {
+          this.messages = this.messages.slice(0, startingMessageCount);
+          await this.save();
+        }
         await this.emitRuntime(runId, "run.cancelled", { reason: (error as Error).message });
       } else {
         await this.emitRuntime(runId, "run.failed", {
@@ -159,6 +180,7 @@ export class Agent {
       this.activeRunStats = undefined;
       if (this.activeController === controller) this.activeController = undefined;
       this.runtimeEvents.forgetRun(runId);
+      await clearRunCheckpoint(this.options.root, this.sessionId);
     }
   }
 
@@ -169,8 +191,10 @@ export class Agent {
   }
 
   private async runWithSignal(prompt: string, signal: AbortSignal, runId: string) {
+    await this.checkpoint(runId, "context");
     this.workspaceContext = await selectWorkspaceContext(this.options.root, prompt);
     this.messages.push({ role: "user", content: prompt });
+    await this.save();
     const verification = new VerificationController({
       root: this.options.root,
       tools: this.tools.list(),
@@ -184,6 +208,7 @@ export class Agent {
     for (let step = 0; step < this.options.maxSteps; step++) {
       signal.throwIfAborted();
       if (this.activeRunStats) this.activeRunStats.modelSteps = step + 1;
+      await this.checkpoint(runId, "context", step + 1);
       let packed = this.pack(await system(
         this.options.root,
         this.options.mode,
@@ -227,6 +252,7 @@ export class Agent {
         omittedMessages: packed.report.omittedMessages,
       }, signal);
       const requestMaxOutputTokens = this.providerOutputLimit(packed.report.totalTokens);
+      await this.checkpoint(runId, "model", step + 1);
       await this.emitRuntime(runId, "model.requested", {
         step: step + 1,
         messageCount: packed.messages.length,
@@ -279,10 +305,12 @@ export class Agent {
         content: response.text,
         ...(response.toolCalls.length ? { toolCalls: response.toolCalls } : {}),
       });
+      await this.save();
 
       if (!response.toolCalls.length) {
         if (this.options.mode === "build" && this.options.autoVerify !== false && verification.hasPendingCodeChanges()) {
           const verificationAttempt = verificationAttempts + 1;
+          await this.checkpoint(runId, "verification", step + 1);
           await this.emitRuntime(runId, "verification.started", { attempt: verificationAttempt }, signal);
           lastVerification = await verification.verify(signal);
           if (this.activeRunStats) {
@@ -330,7 +358,14 @@ export class Agent {
         return response.text;
       }
 
-      for (const call of response.toolCalls) {
+      for (const [callIndex, call] of response.toolCalls.entries()) {
+        const checkpointTool = {
+          id: call.id,
+          name: call.name,
+          index: callIndex,
+          total: response.toolCalls.length,
+        };
+        await this.checkpoint(runId, "tool", step + 1, { ...checkpointTool, state: "pending" });
         const maxToolCalls = this.options.maxToolCalls ?? Number.POSITIVE_INFINITY;
         if ((this.activeRunStats?.toolCalls ?? 0) >= maxToolCalls) {
           throw new AgentBudgetError("tool_calls", maxToolCalls);
@@ -380,6 +415,7 @@ export class Agent {
               risk: tool.risk,
               args: call.arguments,
             }, signal);
+            await this.checkpoint(runId, "tool", step + 1, { ...checkpointTool, state: "running" });
             try {
               content = await tool.execute(call.arguments, {
                 signal,
@@ -427,9 +463,9 @@ export class Agent {
           toolCallId: call.id,
           content,
         });
+        await this.save();
+        await this.checkpoint(runId, "tool", step + 1, { ...checkpointTool, state: "recorded" });
       }
-
-      await this.save();
     }
 
     throw new AgentBudgetError("steps", this.options.maxSteps);
@@ -443,10 +479,13 @@ export class Agent {
     const messages = await loadSession(this.options.root, resolvedId);
     if (!messages) return false;
     this.messages = sanitizeMessages(messages);
+    this.lastRecoveryNotice = undefined;
     if (resolvedId) {
       this.sessionId = resolvedId;
       this.sessionCreatedAt = info?.createdAt ?? this.sessionCreatedAt;
       await migrateLegacySessionSummary(this.options.root, resolvedId);
+      const checkpoint = await readRunCheckpoint(this.options.root, resolvedId);
+      if (checkpoint) await this.reconcileInterruptedRun(checkpoint);
     }
     return true;
   }
@@ -522,6 +561,51 @@ export class Agent {
 
   private emitTool(event: ToolEvent) {
     this.options.onToolEvent?.(event);
+  }
+
+  private async checkpoint(
+    runId: string,
+    phase: RunCheckpointPhase,
+    step = this.activeRunStats?.modelSteps ?? 0,
+    tool?: RunCheckpoint["tool"],
+  ) {
+    const stats = this.activeRunStats ?? emptyRunStats();
+    await writeRunCheckpoint(this.options.root, {
+      runId,
+      sessionId: this.sessionId,
+      phase,
+      messageCount: this.messages.length,
+      progress: {
+        step,
+        modelSteps: stats.modelSteps,
+        toolCalls: stats.toolCalls,
+        totalTokens: stats.totalTokens,
+      },
+      ...(tool ? { tool } : {}),
+    });
+  }
+
+  private async reconcileInterruptedRun(checkpoint: RunCheckpoint) {
+    const pending = pendingToolCalls(this.messages);
+    for (const call of pending) {
+      const active = checkpoint.phase === "tool" && checkpoint.tool?.id === call.id;
+      const state = active ? checkpoint.tool?.state : undefined;
+      const content = state === "running"
+        ? "Interrupted run recovery: this tool was active when CodePilot stopped, so its outcome is unknown. Inspect the workspace before deciding whether to retry it."
+        : "Interrupted run recovery: no durable result was recorded for this tool call. Do not assume it ran; inspect the workspace before retrying it.";
+      this.messages.push({ role: "tool", toolCallId: call.id, name: call.name, content });
+    }
+    if (pending.length) await this.save();
+    await clearRunCheckpoint(this.options.root, this.sessionId);
+    this.lastRecoveryNotice = {
+      runId: checkpoint.runId,
+      phase: checkpoint.phase,
+      updatedAt: checkpoint.updatedAt,
+      recoveredToolCalls: pending.length,
+      message: pending.length
+        ? `Recovered interrupted run ${checkpoint.runId} at ${checkpoint.phase}; ${pending.length} incomplete tool call(s) were marked for workspace inspection.`
+        : `Recovered interrupted run ${checkpoint.runId} at ${checkpoint.phase}; durable session messages were already consistent.`,
+    };
   }
 
   private providerOutputLimit(nextInputTokens: number) {
@@ -663,6 +747,17 @@ function sanitizeMessages(value: unknown): Message[] {
     }
     return [];
   });
+}
+
+function pendingToolCalls(messages: Message[]) {
+  const answered = new Set(
+    messages.flatMap((message) => message.role === "tool" ? [message.toolCallId] : []),
+  );
+  return messages.flatMap((message) =>
+    message.role === "assistant"
+      ? (message.toolCalls ?? []).filter((call) => !answered.has(call.id))
+      : [],
+  );
 }
 
 function withoutEmptyToolCalls(message: Message): Message {

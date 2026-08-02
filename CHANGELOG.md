@@ -13,6 +13,7 @@ All notable changes to CodePilot are documented in this file.
 - Streaming OpenAI-compatible, DeepSeek, and Anthropic responses with incremental tool-call assembly and deterministic event replay.
 - Normalized provider token, cache, and reasoning usage in runtime events and headless run metrics.
 - Run-level input, output, and total Provider token budgets with per-request output caps, estimated-usage markers, `/usage`, and structured headless failure details.
+- Privacy-safe atomic run checkpoints, per-tool message durability, and side-effect-aware interrupted-session recovery without automatic tool replay.
 
 ### Changed
 
