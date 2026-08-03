@@ -27,6 +27,7 @@ All notable changes to CodePilot are documented in this file.
 
 ### Changed
 
+- The release workflow now disables dependency caching and documents a one-time npm token bootstrap followed by token-free Trusted Publishing through GitHub Actions OIDC.
 - Headless patch artifacts now diff against a run-start Git snapshot, isolating Agent changes from a user's pre-existing dirty worktree without mutating the real Git index.
 - Tool-call exhaustion now rejects excess tools with a finalization nudge, allowing one best-effort synthesis turn while repeated over-budget calls still fail closed.
 - Agent guidance now explicitly avoids redundant tool calls and requires synthesis once enough evidence is available.

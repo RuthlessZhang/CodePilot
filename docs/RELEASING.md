@@ -4,12 +4,14 @@ CodePilot releases are immutable npm packages paired with GitHub releases. Prere
 
 ## One-time repository setup
 
-1. Create an npm account that owns the unscoped `codepilot` package name.
-2. Add an npm automation token as the GitHub repository secret `NPM_TOKEN`.
-3. Keep GitHub Actions permissions enabled for the repository. The release workflow needs `contents: write` to create the GitHub release and `id-token: write` to attach npm provenance.
-4. Create the protected GitHub Environment and `DEEPSEEK_API_KEY` described in the README for manually dispatched Provider smoke tests.
+1. Create an npm account, enable two-factor authentication, and confirm that the unscoped `codepilot` package name is available.
+2. Bootstrap the first release with a short-lived granular npm token that can publish `codepilot` and bypass two-factor authentication. Store it temporarily as the GitHub repository secret `NPM_TOKEN`; never commit it.
+3. After the first package version exists, configure npm Trusted Publishing for the GitHub repository `RuthlessZhang/CodePilot`, workflow filename `release.yml`, and allowed action `npm publish`.
+4. Delete the `NPM_TOKEN` repository secret. Subsequent releases use short-lived OpenID Connect credentials from GitHub Actions instead of a stored npm token.
+5. Keep GitHub Actions permissions enabled for the repository. The release workflow needs `contents: write` to create the GitHub release and `id-token: write` for npm Trusted Publishing and provenance.
+6. Create the protected GitHub Environment and `DEEPSEEK_API_KEY` described in the README for manually dispatched Provider smoke tests.
 
-Never store npm or Provider tokens in the repository, package metadata, workflow files, or release artifacts.
+The release workflow intentionally disables dependency caching because it has elevated publication permissions. Never store npm or Provider tokens in the repository, package metadata, workflow files, or release artifacts.
 
 ## Release checklist
 
@@ -27,7 +29,7 @@ git tag -a v0.3.0-rc.1 -m "CodePilot v0.3.0-rc.1"
 git push origin v0.3.0-rc.1
 ```
 
-Pushing a matching `v*` tag runs `.github/workflows/release.yml`. The workflow repeats all release gates, builds a tarball, publishes it to npm with provenance, and then creates a GitHub release containing the exact tarball. If npm publication fails, the GitHub release is not created.
+Pushing a matching `v*` tag runs `.github/workflows/release.yml`. The workflow repeats all release gates, builds a tarball, publishes it to npm with provenance, and then creates a GitHub release containing the exact tarball. The first publication uses the temporary `NPM_TOKEN`; later publications use npm Trusted Publishing automatically. If npm publication fails, the GitHub release is not created.
 
 ## Post-release verification
 

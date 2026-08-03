@@ -39,6 +39,7 @@ The redacted local report is intentionally ignored by Git under `.codepilot/runs
 
 ## Remaining external gates
 
-- Authenticate an npm account that owns the unscoped `codepilot` name and configure the repository `NPM_TOKEN` secret.
+- Authenticate an npm account, enable two-factor authentication, and add a short-lived granular `NPM_TOKEN` secret for the first publication of the currently unclaimed `codepilot` package.
 - Push the matching `v0.3.0-rc.1` tag only after the npm publishing credential is ready.
+- After the first publication, configure npm Trusted Publishing for `RuthlessZhang/CodePilot` and `release.yml`, then delete the bootstrap token.
 - Before promotion to stable, run at least one build-mode trial and one non-trivial remote MCP trial in trusted test workspaces.
