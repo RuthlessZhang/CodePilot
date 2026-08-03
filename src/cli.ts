@@ -40,7 +40,9 @@ function argValue(args: string[], flag: string) {
 }
 
 function integerArg(args: string[], flag: string) {
+  const present = args.includes(flag);
   const value = argValue(args, flag);
+  if (present && value === undefined) throw Error(`${flag} requires a positive integer value`);
   if (value === undefined) return undefined;
   const parsed = Number(value);
   if (!Number.isInteger(parsed) || parsed <= 0) throw Error(`${flag} must be a positive integer`);

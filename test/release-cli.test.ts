@@ -85,6 +85,14 @@ test("release CLI applies the automatic verification timeout override", async ()
   assert.match(report.checks.find((check: { name: string }) => check.name === "verification").detail, /timeout=4567ms/);
 });
 
+test("release CLI rejects a missing automatic verification timeout value", async () => {
+  const configDirectory = await mkdtemp(path.join(os.tmpdir(), "codepilot-release-config-"));
+  const result = await runCli(["--verification-timeout-ms"], configDirectory);
+  assert.notEqual(result.code, 0);
+  assert.match(result.stderr, /--verification-timeout-ms requires a positive integer value/);
+  assert.doesNotMatch(result.stderr, /Missing API key/);
+});
+
 test("--mode with an invalid value exits non-zero with a clear error", async () => {
   const configDirectory = await mkdtemp(path.join(os.tmpdir(), "codepilot-release-config-"));
   const result = await runCli(["--mode", "invalid"], configDirectory);
