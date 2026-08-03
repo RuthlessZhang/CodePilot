@@ -75,6 +75,14 @@ function optionalString(value: unknown) {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
+function booleanOr(value: unknown, fallback: boolean) {
+  if (value === undefined || value === null) return fallback;
+  if (typeof value === "boolean") return value;
+  throw Error(
+    `Expected boolean, got ${typeof value} (${JSON.stringify(value)})`,
+  );
+}
+
 export async function loadConfig(
   cwd: string,
   overrides: Partial<Config> = {},
@@ -207,8 +215,16 @@ export async function loadConfig(
       0,
       20,
     ),
-    autoVerify: fileConfig.autoVerify ?? true,
-    maxVerificationAttempts: fileConfig.maxVerificationAttempts ?? 3,
+    autoVerify: booleanOr(
+      overrides.autoVerify ?? fileConfig.autoVerify,
+      true,
+    ),
+    maxVerificationAttempts: boundedInteger(
+      overrides.maxVerificationAttempts ?? fileConfig.maxVerificationAttempts,
+      3,
+      1,
+      10,
+    ),
     verificationTimeoutMs: boundedInteger(
       overrides.verificationTimeoutMs ?? fileConfig.verificationTimeoutMs,
       300_000,

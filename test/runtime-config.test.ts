@@ -118,3 +118,42 @@ test("rejects simultaneous provider record and replay modes", async () => {
   }));
   await assert.rejects(loadConfig(root), /mutually exclusive/);
 });
+
+test("autoVerify defaults to true and rejects non-boolean values", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "codepilot-autoverify-"));
+  // default (no file)
+  assert.equal((await loadConfig(root)).autoVerify, true);
+  // explicit true
+  await writeFile(path.join(root, ".codepilot.json"), JSON.stringify({ autoVerify: true }));
+  assert.equal((await loadConfig(root)).autoVerify, true);
+  // explicit false
+  await writeFile(path.join(root, ".codepilot.json"), JSON.stringify({ autoVerify: false }));
+  assert.equal((await loadConfig(root)).autoVerify, false);
+  // non-boolean string
+  await writeFile(path.join(root, ".codepilot.json"), JSON.stringify({ autoVerify: "yes" }));
+  await assert.rejects(loadConfig(root), /Expected boolean, got string/);
+  // number
+  await writeFile(path.join(root, ".codepilot.json"), JSON.stringify({ autoVerify: 1 }));
+  await assert.rejects(loadConfig(root), /Expected boolean, got number/);
+});
+
+test("maxVerificationAttempts defaults to 3 and bounds values 1–10", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "codepilot-maxverify-"));
+  // default (no file)
+  assert.equal((await loadConfig(root)).maxVerificationAttempts, 3);
+  // explicit valid
+  await writeFile(path.join(root, ".codepilot.json"), JSON.stringify({ maxVerificationAttempts: 5 }));
+  assert.equal((await loadConfig(root)).maxVerificationAttempts, 5);
+  // lower bound (1)
+  await writeFile(path.join(root, ".codepilot.json"), JSON.stringify({ maxVerificationAttempts: 1 }));
+  assert.equal((await loadConfig(root)).maxVerificationAttempts, 1);
+  // upper bound (10)
+  await writeFile(path.join(root, ".codepilot.json"), JSON.stringify({ maxVerificationAttempts: 10 }));
+  assert.equal((await loadConfig(root)).maxVerificationAttempts, 10);
+  // below minimum clamps to 1
+  await writeFile(path.join(root, ".codepilot.json"), JSON.stringify({ maxVerificationAttempts: 0 }));
+  assert.equal((await loadConfig(root)).maxVerificationAttempts, 1);
+  // above maximum clamps to 10
+  await writeFile(path.join(root, ".codepilot.json"), JSON.stringify({ maxVerificationAttempts: 100 }));
+  assert.equal((await loadConfig(root)).maxVerificationAttempts, 10);
+});
