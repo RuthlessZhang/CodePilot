@@ -1,0 +1,37 @@
+name: Bootstrap npm trusted publishing
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/bootstrap-npm-trust.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  bootstrap:
+    if: github.repository == 'RuthlessZhang/CodePilot'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          package-manager-cache: false
+          registry-url: https://registry.npmjs.org
+      - name: Install npm with trusted-publishing management
+        run: npm install --global npm@11.12.1
+      - name: Configure GitHub Actions as a trusted publisher
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: >-
+          npm trust github @ruthlessz/codepilot
+          --file release.yml
+          --repository RuthlessZhang/CodePilot
+          --yes
+      - name: Verify the trusted relationship
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm trust list @ruthlessz/codepilot --json
