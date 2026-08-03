@@ -8,6 +8,11 @@ import {
 import { createRequire } from "node:module";
 
 const packageVersion = (createRequire(import.meta.url)("../package.json") as { version: string }).version;
+const maximumNegotiationProbeTimeoutMs = 10_000;
+
+function negotiationProbeTimeoutMs(requestTimeoutMs: number) {
+  return Math.min(requestTimeoutMs, maximumNegotiationProbeTimeoutMs);
+}
 
 export type McpToolDefinition = {
   name: string;
@@ -55,7 +60,10 @@ export class McpClient {
       {
         versionNegotiation: {
           mode: "auto",
-          probe: { timeoutMs: Math.min(requestTimeoutMs, 1_000), maxRetries: 0 },
+          // Remote MCP endpoints routinely need more than one second for the
+          // first TLS request. Keep the probe bounded, but give it enough time
+          // to distinguish a modern server from an unavailable endpoint.
+          probe: { timeoutMs: negotiationProbeTimeoutMs(requestTimeoutMs), maxRetries: 0 },
         },
         inputRequired: { autoFulfill: false },
         listMaxPages: 20,

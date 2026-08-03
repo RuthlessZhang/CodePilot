@@ -198,6 +198,46 @@ test("negotiates the modern MCP 2026 protocol through the official client", asyn
   }
 });
 
+test("allows realistic first-request latency during MCP version negotiation", async () => {
+  const transport: Transport = {
+    async start() {},
+    async send(message: JSONRPCMessage) {
+      if (!("id" in message) || !("method" in message)) return;
+      if (message.method === "server/discover") {
+        setTimeout(() => transport.onmessage?.({
+          jsonrpc: "2.0",
+          id: message.id,
+          result: {
+            resultType: "complete",
+            ttlMs: 0,
+            cacheScope: "private",
+            supportedVersions: ["2026-07-28"],
+            capabilities: { tools: {} },
+          },
+        }), 1_200);
+      } else if (message.method === "tools/list") {
+        queueMicrotask(() => transport.onmessage?.({
+          jsonrpc: "2.0",
+          id: message.id,
+          result: {
+            resultType: "complete",
+            ttlMs: 0,
+            cacheScope: "private",
+            tools: [{ name: "remote", inputSchema: { type: "object" } }],
+          },
+        }));
+      }
+    },
+    async close() { transport.onclose?.(); },
+  };
+  const client = new McpClient(transport, 3_000);
+  try {
+    assert.deepEqual((await client.listTools()).map((tool) => tool.name), ["remote"]);
+  } finally {
+    await client.close();
+  }
+});
+
 test("MCP status CLI discovers tools without requiring a model credential", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "codepilot-mcp-cli-workspace-"));
   const directory = await mkdtemp(path.join(os.tmpdir(), "codepilot-mcp-cli-config-"));

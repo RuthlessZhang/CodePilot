@@ -72,8 +72,20 @@ The redacted local report is intentionally ignored by Git under `.codepilot/runs
 - Finalization compatibility: a raw DeepSeek DSML tool-intent string observed when tools were intentionally hidden is now prohibited by the finalization prompt and normalized to safe natural-language output as a narrow fallback.
 - Release decision: the reviewed autonomous Build-mode gate is passed. A non-trivial remote MCP trial remains required before stable promotion.
 
+### Remote MCP gate
+
+- CI baseline: the six post-Build hardening commits were pushed through commit `c8be8a3`; the `ci.yml` workflow and the `main` branch checks both reported passing.
+- Workspace: a disposable initialized Git repository with no project source code or inherited MCP permissions.
+- Transport: public HTTPS Streamable HTTP with no authentication; CodePilot negotiated legacy MCP `2025-11-25` compatibility and discovered three tools.
+- First finding: the version-negotiation probe was capped at one second even when the configured MCP request timeout was longer, causing a valid remote endpoint to fail before normal request timing applied.
+- Correction: the negotiation probe now uses the configured request timeout capped at ten seconds. A delayed modern-protocol regression test proves that first-request latency above one second is accepted without removing the upper bound.
+- Direct runtime result: the remote documentation-structure tool returned 3,495 characters for the official MCP TypeScript SDK repository.
+- Agent result: live `deepseek-v4-pro` selected the exact permitted remote tool once and completed with exit code 0 in 8.3 seconds; two model steps, one tool call, 6,983 total tokens, no local tools, no source edits, and a zero-byte patch artifact.
+- Integrated release gate: `npm run release:check` passed typecheck, 150 tests, production build, and isolated global installation in 172 seconds.
+- Release decision: the non-trivial remote MCP discovery, invocation, permission, Provider-selection, and headless-artifact path is passed.
+
 ## Remaining external gates
 
 - npm Trusted Publishing is deferred until the maintainer can complete npm's passkey authentication from a local, non-remote session. The validated bootstrap-token release path remains active and does not block RC testing.
 - After Trusted Publishing is configured for `@ruthlessz/codepilot`, `RuthlessZhang/CodePilot`, and `release.yml`, verify one token-free prerelease before deleting and revoking the bootstrap token.
-- Before promotion to stable, run one non-trivial remote MCP trial in a trusted test workspace.
+- Publish and install `v0.3.0-rc.2` from a clean tagged commit, then repeat the public-package smoke and one external real-project trial before promoting a stable `v0.3.0`.
