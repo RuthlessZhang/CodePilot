@@ -211,14 +211,23 @@ export class Agent {
     const blockedModelTools = new Set<string>();
     let exploratoryReads = 0;
     let explorationNudged = false;
-    const explorationThreshold = Math.min(12, Math.max(6, Math.floor((this.options.maxToolCalls ?? 100) * 0.25)));
+    const explorationThreshold = Math.min(8, Math.max(4, Math.floor((this.options.maxToolCalls ?? 100) * 0.15)));
 
     for (let step = 0; step < this.options.maxSteps; step++) {
       signal.throwIfAborted();
       if (this.activeRunStats) this.activeRunStats.modelSteps = step + 1;
       await this.checkpoint(runId, "context", step + 1);
-      const exposedToolDefinitions = this.tools.definitions()
-        .filter((definition) => !blockedModelTools.has(definition.name));
+      const finalizationStep = step === this.options.maxSteps - 1;
+      if (finalizationStep) {
+        this.messages.push({
+          role: "user",
+          content: "Finalization reserve: no model-facing tools are available in this last step. Do not request tools or emit tool-call protocol markup. Use the results already present and provide your concise natural-language final answer now. In build mode, returning without tool calls hands pending code changes to CodePilot automatic verification.",
+        });
+        await this.save();
+      }
+      const exposedToolDefinitions = finalizationStep
+        ? []
+        : this.tools.definitions().filter((definition) => !blockedModelTools.has(definition.name));
       let packed = this.pack(await system(
         this.options.root,
         this.options.mode,
@@ -292,6 +301,7 @@ export class Agent {
       }).finally(() => {
         if (this.activeRunStats) this.activeRunStats.modelDurationMs += Date.now() - modelStartedAt;
       });
+      if (finalizationStep) response.text = sanitizeFinalizationText(response.text);
       const accounted = this.addProviderUsage(response.usage, packed.report.totalTokens, response);
       await this.emitRuntime(runId, "model.responded", {
         step: step + 1,
@@ -454,6 +464,14 @@ export class Agent {
                 invalidateCodeGraph(this.options.root);
               }
               verification.recordToolSuccess(call.name, call.arguments, content);
+              if (
+                call.name === "shell"
+                && this.options.autoVerify !== false
+                && verification.hasPendingCodeChanges()
+                && /(?:^|\n)exit_code:\s*0(?:\n|$)/.test(content)
+              ) {
+                content += "\n\nVerification handoff: this allowed command passed and code changes are pending. Do not broaden manual testing; return a final answer now so CodePilot can run its configured automatic verification sequence.";
+              }
               if (tool.risk === "read") {
                 exploratoryReads++;
                 if (!explorationNudged && exploratoryReads >= explorationThreshold) {
@@ -813,6 +831,12 @@ function withoutEmptyToolCalls(message: Message): Message {
     content: message.content,
     ...(message.reasoningContent ? { reasoningContent: message.reasoningContent } : {}),
   };
+}
+
+function sanitizeFinalizationText(text: string) {
+  return /<[^>]*DSML[^>]*tool_calls[^>]*>/i.test(text)
+    ? "Finalization step completed without additional tool execution."
+    : text;
 }
 
 function memoryOptions(options: AgentOptions): MemoryLoadOptions {

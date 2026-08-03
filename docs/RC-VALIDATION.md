@@ -60,8 +60,19 @@ The redacted local report is intentionally ignored by Git under `.codepilot/runs
 - Release gate: `npm run release:check` passed typecheck, 145 tests, production build, and isolated global package installation in 164 seconds.
 - Release decision: the known P0 findings from the first Build trial are implemented and locally verified. The autonomous Build-mode gate remains open until a new live trial completes without manual repair.
 
+### Autonomous Build-mode gate
+
+- Task: validate `autoVerify` and bound `maxVerificationAttempts` in project configuration, with focused regression tests.
+- Comparison run: the first post-P0 attempt followed the exact Shell allowlist and ran genuinely targeted tests, but exhausted 24 model steps immediately after additional manual tests; automatic verification did not start.
+- Kernel correction: CodePilot now reserves the final model step for tool-free completion, moves the read-only convergence notice earlier, and hands a successful manual check directly to automatic verification.
+- Fresh run result: `completed` with exit code 0, one automatic-verification attempt, and `verificationStatus: passed`; no manual code repair or resume prompt was used.
+- Metrics: 24 model steps, 29 tool calls, 263,261 input tokens, 4,726 output tokens, and 267 seconds total runtime.
+- Automatic checks: both changed files passed LSP diagnostics, the focused runtime-config test passed, and `npm run typecheck`, `npm run test`, and `npm run build` all passed.
+- Finalization compatibility: a raw DeepSeek DSML tool-intent string observed when tools were intentionally hidden is now prohibited by the finalization prompt and normalized to safe natural-language output as a narrow fallback.
+- Release decision: the reviewed autonomous Build-mode gate is passed. A non-trivial remote MCP trial remains required before stable promotion.
+
 ## Remaining external gates
 
 - npm Trusted Publishing is deferred until the maintainer can complete npm's passkey authentication from a local, non-remote session. The validated bootstrap-token release path remains active and does not block RC testing.
 - After Trusted Publishing is configured for `@ruthlessz/codepilot`, `RuthlessZhang/CodePilot`, and `release.yml`, verify one token-free prerelease before deleting and revoking the bootstrap token.
-- Before promotion to stable, repeat Build mode until one reviewed trial completes autonomously, and run one non-trivial remote MCP trial in a trusted test workspace.
+- Before promotion to stable, run one non-trivial remote MCP trial in a trusted test workspace.

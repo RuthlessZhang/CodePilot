@@ -12,6 +12,8 @@ All notable changes to CodePilot are documented in this file.
 
 - Repeatedly denied tools are removed from the model-visible tool set for the rest of the run while remaining available to trusted automatic verification.
 - Build-mode guidance and runtime notices now push long read-only exploration toward a scoped edit, focused tests, or finalization.
+- The final model step is reserved for tool-free synthesis and automatic-verification handoff instead of ending immediately after the last tool result.
+- Raw DeepSeek DSML tool-intent markup emitted during a tool-free finalization step is normalized to a safe natural-language completion.
 - The test runner honors explicit test-file arguments and launches tests with an isolated credential directory and no inherited Provider API keys.
 
 ### Fixed

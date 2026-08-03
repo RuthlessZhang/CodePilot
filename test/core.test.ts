@@ -527,7 +527,51 @@ test("nudges a build run to converge after repeated read-only exploration", asyn
 
   assert.equal(await agent.run("inspect briefly"), "done");
   const results = finalMessages.filter((message) => message.role === "tool").map((message) => message.content);
-  assert.match(results.at(-1) ?? "", /Convergence notice/);
+  assert.equal(results.some((result) => /Convergence notice/.test(result)), true);
+});
+
+test("reserves the last model step for tool-free finalization", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "codepilot-finalization-reserve-"));
+  await writeFile(path.join(root, "note.txt"), "evidence\n");
+  let calls = 0;
+  let finalTools: string[] = [];
+  let finalMessages: import("../src/types.js").Message[] = [];
+  const provider: Provider = {
+    async complete(input) {
+      calls++;
+      if (calls < 3) {
+        return {
+          text: "",
+          toolCalls: [{ id: `read-${calls}`, name: "read_file", arguments: { path: "note.txt" } }],
+        };
+      }
+      finalTools = input.tools.map((tool) => tool.name);
+      finalMessages = input.messages;
+      return {
+        text: '<｜｜DSML｜｜tool_calls><｜｜DSML｜｜invoke name="todo_write"></｜｜DSML｜｜tool_calls>',
+        toolCalls: [],
+      };
+    },
+  };
+  const agent = new Agent({
+    root,
+    provider,
+    tools: createTools(root),
+    approve: async () => true,
+    maxSteps: 3,
+    maxToolCalls: 10,
+    contextBudgetTokens: 64_000,
+    mode: "build",
+    autoVerify: false,
+  });
+
+  assert.equal(
+    await agent.run("finish within budget"),
+    "Finalization step completed without additional tool execution.",
+  );
+  assert.equal(calls, 3);
+  assert.deepEqual(finalTools, []);
+  assert.match(finalMessages.at(-1)?.content ?? "", /Finalization reserve/);
 });
 
 test("does not resend empty tool call arrays from prior turns", async () => {
