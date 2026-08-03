@@ -204,6 +204,7 @@ export class Agent {
     let verificationAttempts = 0;
     let previousFailure = "";
     let lastVerification: VerificationResult | undefined;
+    let toolBudgetNudged = false;
 
     for (let step = 0; step < this.options.maxSteps; step++) {
       signal.throwIfAborted();
@@ -292,6 +293,9 @@ export class Agent {
         usageEstimated: accounted.estimated,
         ...(response.finishReason ? { finishReason: response.finishReason } : {}),
       }, signal);
+      if (response.toolCalls.length && toolBudgetNudged) {
+        throw new AgentBudgetError("tool_calls", this.options.maxToolCalls ?? 0);
+      }
       if (response.toolCalls.length) this.ensureContinuationBudget();
 
       const deferCompletionText = response.toolCalls.length === 0
@@ -368,10 +372,6 @@ export class Agent {
         };
         await this.checkpoint(runId, "tool", step + 1, { ...checkpointTool, state: "pending" });
         const maxToolCalls = this.options.maxToolCalls ?? Number.POSITIVE_INFINITY;
-        if ((this.activeRunStats?.toolCalls ?? 0) >= maxToolCalls) {
-          throw new AgentBudgetError("tool_calls", maxToolCalls);
-        }
-        if (this.activeRunStats) this.activeRunStats.toolCalls++;
         const tool = this.tools.get(call.name);
         let content = "Unknown tool";
         await this.emitRuntime(runId, "tool.requested", {
@@ -380,13 +380,21 @@ export class Agent {
           args: call.arguments,
         }, signal);
 
-        if (!tool) {
+        if ((this.activeRunStats?.toolCalls ?? 0) >= maxToolCalls) {
+          toolBudgetNudged = true;
+          content = "Tool call budget exhausted. This tool was not executed. Use the results already available and provide the best-effort final answer without calling more tools.";
+          this.emitTool({ phase: "failed", name: call.name, args: call.arguments, content });
+          await this.emitRuntime(runId, "tool.failed", { name: call.name, risk: tool?.risk, reason: content }, signal);
+        } else if (!tool) {
+          if (this.activeRunStats) this.activeRunStats.toolCalls++;
           await this.emitRuntime(runId, "tool.failed", { name: call.name, reason: content }, signal);
         } else if (this.options.mode === "plan" && tool.risk !== "read") {
+          if (this.activeRunStats) this.activeRunStats.toolCalls++;
           content = `Permission denied: CodePilot is in plan mode, so ${tool.risk} tools are disabled.`;
           this.emitTool({ phase: "failed", name: call.name, args: call.arguments, content });
           await this.emitRuntime(runId, "tool.failed", { name: call.name, risk: tool.risk, reason: content }, signal);
         } else {
+          if (this.activeRunStats) this.activeRunStats.toolCalls++;
           const authorization = await this.emitRuntime(runId, "tool.authorizing", {
             name: call.name,
             risk: tool.risk,
@@ -806,6 +814,7 @@ async function system(
   const base = `You are CodePilot, a careful coding agent in ${root}.
 ${modeRules}
 Inspect before editing, stay in the workspace, preserve user changes, and run relevant tests.
+Use the smallest useful set of tool calls. Never repeat a tool call when its result is already available in the conversation; batch independent reads, then stop exploring and answer once you have enough evidence.
 Before editing code, use the pre-edit impact analysis when available; confirm uncertain callers or dynamic relationships with impact_analysis, code_graph, LSP, or search.
 For multi-step coding tasks, use todo_write to keep an explicit task list and update it as work progresses.
 Prefer apply_patch for code edits; use write_file only when creating or replacing a whole file is clearer.

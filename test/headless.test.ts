@@ -69,7 +69,7 @@ test("writes a machine-readable headless result and patch artifact", async () =>
     capturePatch: async () => ({ available: true, patch: "diff --git a/a b/a\n" }),
   });
 
-  assert.equal(result.status, "completed");
+  assert.equal(result.status, "completed", result.artifact.patchError);
   assert.equal(result.exitCode, 0);
   assert.equal(result.artifact.patchAvailable, true);
   assert.equal(result.provider.mode, "live");
@@ -177,10 +177,82 @@ test("captures tracked changes and untracked files without mutating the Git inde
   assert.match(status.stdout, /\?\? new\.txt/);
 });
 
+test("headless patch contains only changes made during the run", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "codepilot-headless-baseline-"));
+  await execFileAsync("git", ["init"], { cwd: root });
+  await execFileAsync("git", ["config", "user.email", "codepilot@example.invalid"], { cwd: root });
+  await execFileAsync("git", ["config", "user.name", "CodePilot Test"], { cwd: root });
+  await writeFile(path.join(root, "tracked.txt"), "committed\n");
+  await writeFile(path.join(root, ".gitignore"), ".codepilot/\n");
+  await execFileAsync("git", ["add", "tracked.txt", ".gitignore"], { cwd: root });
+  await execFileAsync("git", ["commit", "-m", "base"], { cwd: root });
+  await writeFile(path.join(root, "tracked.txt"), "user change\n");
+  await writeFile(path.join(root, "user-untracked.txt"), "keep me\n");
+  await mkdir(path.join(root, ".codepilot"));
+  await writeFile(path.join(root, ".codepilot", "existing-session.json"), "{}\n");
+
+  const result = await runHeadless({
+    root,
+    task: "edit only tracked.txt",
+    agent: new FakeAgent(async () => {
+      await writeFile(path.join(root, "tracked.txt"), "agent change\n");
+      await writeFile(path.join(root, "agent-untracked.txt"), "created by agent\n");
+      return "done";
+    }),
+    maxRuntimeMs: 1000,
+    maxSteps: 3,
+    maxToolCalls: 3,
+  });
+
+  assert.equal(result.status, "completed", result.artifact.patchError);
+  const patch = await readFile(path.join(root, result.artifact.patchPath!), "utf8");
+  assert.match(patch, /-user change/);
+  assert.match(patch, /\+agent change/);
+  assert.match(patch, /agent-untracked\.txt/);
+  assert.doesNotMatch(patch, /committed|user-untracked\.txt|existing-session\.json/);
+  const status = await execFileAsync("git", ["status", "--short"], { cwd: root });
+  assert.match(status.stdout, / M tracked\.txt/);
+  assert.match(status.stdout, /\?\? user-untracked\.txt/);
+});
+
 test("enforces the Agent tool-call budget and headless permissions fail closed", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "codepilot-headless-agent-"));
   await mkdir(path.join(root, "src"));
   await writeFile(path.join(root, "src", "a.ts"), "export const a = 1;\n");
+  let finalizationTurns = 0;
+  let sawBudgetNudge = false;
+  const finalizing = new Agent({
+    root,
+    provider: {
+      async complete(input) {
+        finalizationTurns++;
+        if (finalizationTurns === 1) {
+          return {
+            text: "",
+            toolCalls: [
+              { id: "allowed", name: "read_file", arguments: { path: "src/a.ts" } },
+              { id: "over-budget", name: "read_file", arguments: { path: "src/a.ts" } },
+            ],
+          };
+        }
+        sawBudgetNudge = input.messages.some(
+          (message) => message.role === "tool" && message.content.includes("Tool call budget exhausted"),
+        );
+        return { text: "best-effort final", toolCalls: [] };
+      },
+    },
+    tools: createTools(root),
+    approve: async () => true,
+    maxSteps: 3,
+    maxToolCalls: 1,
+    contextBudgetTokens: 64000,
+    mode: "plan",
+    autoVerify: false,
+  });
+  assert.equal(await finalizing.run("inspect efficiently"), "best-effort final");
+  assert.equal(finalizing.getLastRunStats()?.toolCalls, 1);
+  assert.equal(sawBudgetNudge, true);
+
   const provider: Provider = {
     async complete() {
       return {

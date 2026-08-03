@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
-import { mkdir, rename, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rename, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { AgentBudgetError, type AgentBudgetKind, type AgentRunStats } from "./agent.js";
 import type { ProviderExecutionMode } from "./provider-replay.js";
@@ -92,13 +93,14 @@ async function atomicWrite(target: string, content: string) {
   await rename(temporary, target);
 }
 
-function runGit(root: string, args: string[]) {
+function runGit(root: string, args: string[], env?: NodeJS.ProcessEnv, input?: string) {
   return new Promise<{ code: number; stdout: string; stderr: string }>((resolve) => {
-    const child = spawn("git", args, { cwd: root, windowsHide: true });
+    const child = spawn("git", args, { cwd: root, env: env ?? process.env, windowsHide: true });
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];
     child.stdout.on("data", (chunk) => stdout.push(Buffer.from(chunk)));
     child.stderr.on("data", (chunk) => stderr.push(Buffer.from(chunk)));
+    if (input !== undefined) child.stdin.end(input);
     child.on("error", (error) => resolve({ code: 127, stdout: "", stderr: error.message }));
     child.on("close", (code) => resolve({
       code: code ?? 1,
@@ -108,7 +110,65 @@ function runGit(root: string, args: string[]) {
   });
 }
 
-export async function captureGitPatch(root: string): Promise<PatchCapture> {
+type GitSnapshot =
+  | { available: true; tree: string }
+  | { available: false; error: string };
+
+async function captureGitSnapshot(root: string): Promise<GitSnapshot> {
+  const repository = await runGit(root, ["rev-parse", "--is-inside-work-tree"]);
+  if (repository.code !== 0 || repository.stdout.trim() !== "true") {
+    return { available: false, error: repository.stderr.trim() || "Workspace is not a Git repository" };
+  }
+
+  const untracked = await runGit(root, ["ls-files", "--others", "--exclude-standard", "-z"]);
+  if (untracked.code !== 0) return { available: false, error: untracked.stderr.trim() || "Unable to list untracked files" };
+  const untrackedFiles = untracked.stdout.split("\0").filter((file) => file && !normalize(file).startsWith(".codepilot/"));
+  if (untrackedFiles.length > 100) {
+    return { available: false, error: `Patch capture refused ${untrackedFiles.length} untracked files (limit 100)` };
+  }
+
+  const temporaryRoot = await mkdtemp(path.join(os.tmpdir(), "codepilot-git-index-"));
+  const indexFile = path.join(temporaryRoot, "index");
+  const env = { ...process.env, GIT_INDEX_FILE: indexFile };
+  try {
+    const hasHead = (await runGit(root, ["rev-parse", "--verify", "HEAD"])).code === 0;
+    const readTree = await runGit(root, hasHead ? ["read-tree", "HEAD"] : ["read-tree", "--empty"], env);
+    if (readTree.code !== 0) return { available: false, error: readTree.stderr.trim() || "Unable to initialize patch snapshot" };
+    const files = await runGit(root, ["ls-files", "--cached", "--others", "--exclude-standard", "-z"]);
+    if (files.code !== 0) return { available: false, error: files.stderr.trim() || "Unable to list patch snapshot files" };
+    const snapshotFiles = files.stdout.split("\0").filter((file) => file && !normalize(file).startsWith(".codepilot/"));
+    if (snapshotFiles.length) {
+      const stage = await runGit(
+        root,
+        ["add", "-A", "--pathspec-from-file=-", "--pathspec-file-nul"],
+        env,
+        `${snapshotFiles.join("\0")}\0`,
+      );
+      if (stage.code !== 0) return { available: false, error: stage.stderr.trim() || "Unable to stage patch snapshot" };
+    }
+    const tree = await runGit(root, ["write-tree"], env);
+    if (tree.code !== 0 || !tree.stdout.trim()) {
+      return { available: false, error: tree.stderr.trim() || "Unable to write patch snapshot" };
+    }
+    return { available: true, tree: tree.stdout.trim() };
+  } finally {
+    await rm(temporaryRoot, { recursive: true, force: true });
+  }
+}
+
+export async function captureGitPatch(root: string, baselineTree?: string): Promise<PatchCapture> {
+  if (baselineTree) {
+    const current = await captureGitSnapshot(root);
+    if (!current.available) return { available: false, patch: "", error: current.error };
+    const diff = await runGit(root, [
+      "diff", "--binary", "--full-index", "--no-ext-diff", baselineTree, current.tree,
+      "--", ".", ":(exclude).codepilot/**",
+    ]);
+    return diff.code === 0
+      ? { available: true, patch: diff.stdout }
+      : { available: false, patch: "", error: diff.stderr.trim() || "Unable to capture run patch" };
+  }
+
   const repository = await runGit(root, ["rev-parse", "--is-inside-work-tree"]);
   if (repository.code !== 0 || repository.stdout.trim() !== "true") {
     return { available: false, patch: "", error: repository.stderr.trim() || "Workspace is not a Git repository" };
@@ -178,6 +238,7 @@ export async function runHeadless(options: RunHeadlessOptions): Promise<Headless
   let response: string | undefined;
   let errorMessage: string | undefined;
   let budgetExceeded: HeadlessResult["budgetExceeded"];
+  const patchBaseline = options.capturePatch ? undefined : await captureGitSnapshot(options.root);
   const timer = setTimeout(() => {
     timedOut = true;
     options.agent.cancel();
@@ -199,7 +260,11 @@ export async function runHeadless(options: RunHeadlessOptions): Promise<Headless
     clearTimeout(timer);
   }
 
-  const patch = await (options.capturePatch ?? captureGitPatch)(options.root);
+  const patch = options.capturePatch
+    ? await options.capturePatch(options.root)
+    : patchBaseline?.available
+      ? await captureGitPatch(options.root, patchBaseline.tree)
+      : { available: false, patch: "", error: patchBaseline?.error ?? "Unable to capture initial Git state" };
   if (status === "completed" && !patch.available) status = "incomplete";
   if (patch.available) await atomicWrite(patchTarget, patch.patch);
   const completed = Date.now();

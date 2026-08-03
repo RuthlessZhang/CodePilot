@@ -874,6 +874,8 @@ test("injects only relevant rules into agent context", async () => {
   });
 
   await agent.run("fix failing tests");
+  assert.match(system, /Never repeat a tool call/);
+  assert.match(system, /stop exploring and answer once you have enough evidence/);
   assert.match(system, /Testing/);
   assert.doesNotMatch(system, /Release/);
 });
