@@ -68,6 +68,7 @@ The redacted local report is intentionally ignored by Git under `.codepilot/runs
 - Fresh run result: `completed` with exit code 0, one automatic-verification attempt, and `verificationStatus: passed`; no manual code repair or resume prompt was used.
 - Metrics: 24 model steps, 29 tool calls, 263,261 input tokens, 4,726 output tokens, and 267 seconds total runtime.
 - Automatic checks: both changed files passed LSP diagnostics, the focused runtime-config test passed, and `npm run typecheck`, `npm run test`, and `npm run build` all passed.
+- Integrated release gate: after merging the kernel and generated patch, `npm run release:check` passed typecheck, 149 tests, production build, and isolated global installation in 168 seconds.
 - Finalization compatibility: a raw DeepSeek DSML tool-intent string observed when tools were intentionally hidden is now prohibited by the finalization prompt and normalized to safe natural-language output as a narrow fallback.
 - Release decision: the reviewed autonomous Build-mode gate is passed. A non-trivial remote MCP trial remains required before stable promotion.
 
