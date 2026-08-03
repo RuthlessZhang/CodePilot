@@ -41,5 +41,6 @@ The redacted local report is intentionally ignored by Git under `.codepilot/runs
 
 ## Remaining external gates
 
-- After the first publication, configure npm Trusted Publishing for `@ruthlessz/codepilot`, `RuthlessZhang/CodePilot`, and `release.yml`, then delete the bootstrap token.
+- npm Trusted Publishing is deferred until the maintainer can complete npm's passkey authentication from a local, non-remote session. The validated bootstrap-token release path remains active and does not block RC testing.
+- After Trusted Publishing is configured for `@ruthlessz/codepilot`, `RuthlessZhang/CodePilot`, and `release.yml`, verify one token-free prerelease before deleting and revoking the bootstrap token.
 - Before promotion to stable, run at least one build-mode trial and one non-trivial remote MCP trial in trusted test workspaces.
