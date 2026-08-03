@@ -8,6 +8,8 @@ Validated on 2026-08-03. This record contains no credentials, prompts, response 
 - GitHub CI #26: passed all six Linux, Windows, and macOS jobs on Node.js 20 and 24 for scoped-package commit `f6e66e7`.
 - npm dry-run package: `@ruthlessz/codepilot@0.3.0-rc.1`, 145 files, approximately 162 KB compressed.
 - Clean isolated global installation: passed on Windows; the CI matrix repeats it on Node.js 24 for every supported operating system.
+- GitHub Release #3: published `v0.3.0-rc.1` successfully from commit `13f0783` and created the matching prerelease and tarball asset.
+- Public registry verification: `@ruthlessz/codepilot@next` resolved to `0.3.0-rc.1`; a fresh isolated global install passed both `codepilot --version` and `codepilot --help`.
 
 ## Live DeepSeek contract smoke
 
@@ -39,6 +41,5 @@ The redacted local report is intentionally ignored by Git under `.codepilot/runs
 
 ## Remaining external gates
 
-- Publish the first `@ruthlessz/codepilot@0.3.0-rc.1` package from the matching Git tag; the bootstrap token has already authenticated successfully and produced a provenance statement.
 - After the first publication, configure npm Trusted Publishing for `@ruthlessz/codepilot`, `RuthlessZhang/CodePilot`, and `release.yml`, then delete the bootstrap token.
 - Before promotion to stable, run at least one build-mode trial and one non-trivial remote MCP trial in trusted test workspaces.
