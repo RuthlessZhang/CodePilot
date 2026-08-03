@@ -27,6 +27,7 @@ All notable changes to CodePilot are documented in this file.
 
 ### Changed
 
+- The npm package is published as `@ruthlessz/codepilot`; the installed executable and product name remain `codepilot` and CodePilot.
 - Release publication now passes an explicit `./release/*.tgz` path so npm cannot misinterpret the packed artifact as a GitHub repository shorthand.
 - The release workflow now disables dependency caching and documents a one-time npm token bootstrap followed by token-free Trusted Publishing through GitHub Actions OIDC.
 - Headless patch artifacts now diff against a run-start Git snapshot, isolating Agent changes from a user's pre-existing dirty worktree without mutating the real Git index.

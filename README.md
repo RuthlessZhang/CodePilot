@@ -7,7 +7,7 @@ CodePilot is a small, auditable terminal coding agent written in TypeScript. It 
 CodePilot requires Node.js 20 or newer. After `v0.3.0-rc.1` is published, install the prerelease from npm's `next` channel:
 
 ```powershell
-npm install --global codepilot@next
+npm install --global @ruthlessz/codepilot@next
 codepilot --version
 codepilot --help
 ```

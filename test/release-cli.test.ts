@@ -43,6 +43,13 @@ test("release CLI exposes version and help without a credential", async () => {
   assert.match(help.stdout, /codepilot init/);
 });
 
+test("release package uses the public npm scope and preserves the codepilot executable", async () => {
+  const packageJson = JSON.parse(await readFile(path.join(repositoryRoot, "package.json"), "utf8"));
+  assert.equal(packageJson.name, "@ruthlessz/codepilot");
+  assert.equal(packageJson.publishConfig?.access, "public");
+  assert.equal(packageJson.bin?.codepilot, "dist/cli.js");
+});
+
 test("release CLI initializes a workspace without a credential", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "codepilot-release-init-"));
   const configDirectory = await mkdtemp(path.join(os.tmpdir(), "codepilot-release-config-"));

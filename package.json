@@ -1,5 +1,5 @@
 {
-  "name": "codepilot",
+  "name": "@ruthlessz/codepilot",
   "version": "0.3.0-rc.1",
   "description": "An auditable terminal coding agent with safe editing, memory, recovery, and MCP tools",
   "type": "module",

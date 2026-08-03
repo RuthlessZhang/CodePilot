@@ -4,9 +4,9 @@ CodePilot releases are immutable npm packages paired with GitHub releases. Prere
 
 ## One-time repository setup
 
-1. Create an npm account, enable two-factor authentication, and confirm that the unscoped `codepilot` package name is available.
-2. Bootstrap the first release with a short-lived granular npm token that can publish `codepilot` and bypass two-factor authentication. Store it temporarily as the GitHub repository secret `NPM_TOKEN`; never commit it.
-3. After the first package version exists, configure npm Trusted Publishing for the GitHub repository `RuthlessZhang/CodePilot`, workflow filename `release.yml`, and allowed action `npm publish`.
+1. Create an npm account, enable two-factor authentication, and confirm that it owns the `@ruthlessz` scope.
+2. Bootstrap the first release with a short-lived granular npm token that can publish `@ruthlessz/codepilot` and bypass two-factor authentication. Store it temporarily as the GitHub repository secret `NPM_TOKEN`; never commit it.
+3. After the first package version exists, configure npm Trusted Publishing for `@ruthlessz/codepilot`, GitHub repository `RuthlessZhang/CodePilot`, workflow filename `release.yml`, and allowed action `npm publish`.
 4. Delete the `NPM_TOKEN` repository secret. Subsequent releases use short-lived OpenID Connect credentials from GitHub Actions instead of a stored npm token.
 5. Keep GitHub Actions permissions enabled for the repository. The release workflow needs `contents: write` to create the GitHub release and `id-token: write` for npm Trusted Publishing and provenance.
 6. Create the protected GitHub Environment and `DEEPSEEK_API_KEY` described in the README for manually dispatched Provider smoke tests.
@@ -34,8 +34,8 @@ Pushing a matching `v*` tag runs `.github/workflows/release.yml`. The workflow r
 ## Post-release verification
 
 ```powershell
-npm view codepilot@next version dist.integrity
-npm install --global codepilot@next
+npm view @ruthlessz/codepilot@next version dist.integrity
+npm install --global @ruthlessz/codepilot@next
 codepilot --version
 codepilot --help
 ```

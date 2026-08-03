@@ -4,9 +4,9 @@ Validated on 2026-08-03. This record contains no credentials, prompts, response 
 
 ## Automated release gates
 
-- Local `npm run release:check`: passed after the RC trial fixes with 133 tests, a clean build, and an isolated global installation.
-- GitHub CI #21: passed all six Linux, Windows, and macOS jobs on Node.js 20 and 24 for the post-trial-fix commit `74565a8`.
-- npm dry-run package: `codepilot@0.3.0-rc.1`, 145 files, approximately 160 KB compressed.
+- Local `npm run release:check`: passed after release hardening with 135 tests, a clean build, and an isolated global installation.
+- GitHub CI #24: passed all six Linux, Windows, and macOS jobs on Node.js 20 and 24 for the explicit local-tarball fix `13fae90`.
+- npm dry-run package: `@ruthlessz/codepilot@0.3.0-rc.1`, 145 files, approximately 162 KB compressed.
 - Clean isolated global installation: passed on Windows; the CI matrix repeats it on Node.js 24 for every supported operating system.
 
 ## Live DeepSeek contract smoke
@@ -39,7 +39,6 @@ The redacted local report is intentionally ignored by Git under `.codepilot/runs
 
 ## Remaining external gates
 
-- Authenticate an npm account, enable two-factor authentication, and add a short-lived granular `NPM_TOKEN` secret for the first publication of the currently unclaimed `codepilot` package.
-- Push the matching `v0.3.0-rc.1` tag only after the npm publishing credential is ready.
-- After the first publication, configure npm Trusted Publishing for `RuthlessZhang/CodePilot` and `release.yml`, then delete the bootstrap token.
+- Publish the first `@ruthlessz/codepilot@0.3.0-rc.1` package from the matching Git tag; the bootstrap token has already authenticated successfully and produced a provenance statement.
+- After the first publication, configure npm Trusted Publishing for `@ruthlessz/codepilot`, `RuthlessZhang/CodePilot`, and `release.yml`, then delete the bootstrap token.
 - Before promotion to stable, run at least one build-mode trial and one non-trivial remote MCP trial in trusted test workspaces.
