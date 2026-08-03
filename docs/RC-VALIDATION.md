@@ -5,7 +5,7 @@ Validated on 2026-08-03. This record contains no credentials, prompts, response 
 ## Automated release gates
 
 - Local `npm run release:check`: passed after release hardening with 135 tests, a clean build, and an isolated global installation.
-- GitHub CI #24: passed all six Linux, Windows, and macOS jobs on Node.js 20 and 24 for the explicit local-tarball fix `13fae90`.
+- GitHub CI #26: passed all six Linux, Windows, and macOS jobs on Node.js 20 and 24 for scoped-package commit `f6e66e7`.
 - npm dry-run package: `@ruthlessz/codepilot@0.3.0-rc.1`, 145 files, approximately 162 KB compressed.
 - Clean isolated global installation: passed on Windows; the CI matrix repeats it on Node.js 24 for every supported operating system.
 
