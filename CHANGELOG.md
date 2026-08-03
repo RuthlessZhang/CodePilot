@@ -4,8 +4,12 @@ All notable changes to CodePilot are documented in this file.
 
 ## [Unreleased]
 
+## [0.3.0-rc.1] - 2026-08-03
+
 ### Added
 
+- Release-candidate npm metadata, clean global-install verification, macOS CI coverage, and a tag-gated npm/GitHub release workflow with provenance.
+- Credential-free top-level `--help`, `--version`, `init`, and `doctor` CLI entry points for first-run setup and diagnostics.
 - Model-aware context profiles with explicit output and safety reserves, tool-schema accounting, named system-section reporting, and age-aware tool-result pruning.
 - Layered project memory with a concise index, on-demand topic retrieval, legacy migration, and approved `memory_read`/`memory_write` tools.
 - Credential-safe provider request recording and strict offline replay for deterministic real-model regression tests and failure injection.
@@ -23,6 +27,8 @@ All notable changes to CodePilot are documented in this file.
 
 ### Changed
 
+- TypeScript diagnostics now reopen stale LSP documents and fall back to the project TypeScript compiler when an upstream server returns no semantic diagnostics.
+- Windows command timeouts terminate the complete process tree, and the test runner uses deterministic cross-platform discovery and bounded concurrency.
 - The default working input cap is now 128K tokens where the selected model window allows it; explicit project budgets are clamped to the usable input window.
 - OpenAI-compatible and Anthropic requests now use the configured maximum output-token limit.
 - Provider retries stop after the first streamed semantic event to prevent duplicated output.

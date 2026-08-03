@@ -2,7 +2,29 @@
 
 CodePilot is a small, auditable terminal coding agent written in TypeScript. It supports OpenAI-compatible APIs, Anthropic, and DeepSeek, with tool calling, workspace file operations, shell execution, approval gates, project instructions, project memory, session restore, plan/build modes, git inspection, diff previews, and undo snapshots.
 
-## Quick Start
+## Install the Release Candidate
+
+CodePilot requires Node.js 20 or newer. After `v0.3.0-rc.1` is published, install the prerelease from npm's `next` channel:
+
+```powershell
+npm install --global codepilot@next
+codepilot --version
+codepilot --help
+```
+
+Initialize a project and configure DeepSeek once:
+
+```powershell
+cd D:\your-project
+codepilot init
+codepilot auth set deepseek
+codepilot doctor
+codepilot --provider deepseek
+```
+
+`codepilot init`, `codepilot doctor`, `codepilot --help`, and `codepilot --version` do not require a Provider credential. `doctor` exits nonzero when it finds a release-blocking problem, including a missing credential, while still printing the complete safe report.
+
+## Develop from Source
 
 ```powershell
 npm install
@@ -21,20 +43,20 @@ Use CodePilot on another project:
 
 ```powershell
 cd D:\your-project
-node C:\Users\18355\Documents\Codex\CodePilot\dist\cli.js --provider deepseek
+codepilot --provider deepseek
 ```
 
-Or specify the workspace explicitly from any directory. CodePilot refuses filesystem roots and Windows system directories as workspaces:
+When developing from source, replace `codepilot` with `node <CodePilot checkout>\dist\cli.js`. You can also specify the workspace explicitly from any directory. CodePilot refuses filesystem roots and Windows system directories as workspaces:
 
 ```powershell
-node C:\Users\18355\Documents\Codex\CodePilot\dist\cli.js --provider deepseek --cwd C:\Users\18355\codepilot-wikitok-test\frontend
+codepilot --provider deepseek --cwd D:\your-project
 ```
 
 Resume the latest session in a workspace with `--resume` (or `--continue`), or choose an exact ID shown by `/sessions`:
 
 ```powershell
-node C:\Users\18355\Documents\Codex\CodePilot\dist\cli.js --provider deepseek --cwd C:\Users\18355\codepilot-wikitok-test\frontend --resume
-node C:\Users\18355\Documents\Codex\CodePilot\dist\cli.js --provider deepseek --cwd C:\Users\18355\codepilot-wikitok-test\frontend --session 01234567-89ab-cdef-0123-456789abcdef
+codepilot --provider deepseek --cwd D:\your-project --resume
+codepilot --provider deepseek --cwd D:\your-project --session 01234567-89ab-cdef-0123-456789abcdef
 ```
 
 ## Providers

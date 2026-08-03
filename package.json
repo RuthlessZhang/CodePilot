@@ -1,7 +1,7 @@
 {
   "name": "codepilot",
-  "version": "0.2.0",
-  "description": "A small, auditable terminal coding agent",
+  "version": "0.3.0-rc.1",
+  "description": "An auditable terminal coding agent with safe editing, memory, recovery, and MCP tools",
   "type": "module",
   "bin": {
     "codepilot": "dist/cli.js"
@@ -17,8 +17,10 @@
     "dev": "tsx src/cli.ts",
     "smoke:providers": "tsx src/provider-smoke.ts",
     "test": "node scripts/run-tests.mjs",
+    "test:install": "node scripts/verify-package-install.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "prepack": "npm run build"
+    "prepack": "npm run build",
+    "release:check": "npm run typecheck && npm test && npm run build && npm run test:install"
   },
   "engines": {
     "node": ">=20"
@@ -28,6 +30,25 @@
     "tsx": "^4.20.0"
   },
   "license": "MIT",
+  "author": "RuthlessZhang",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/RuthlessZhang/CodePilot.git"
+  },
+  "homepage": "https://github.com/RuthlessZhang/CodePilot#readme",
+  "bugs": {
+    "url": "https://github.com/RuthlessZhang/CodePilot/issues"
+  },
+  "keywords": [
+    "coding-agent",
+    "cli",
+    "deepseek",
+    "mcp",
+    "typescript"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
   "dependencies": {
     "@modelcontextprotocol/client": "^2.0.0",
     "pyright": "^1.1.411",

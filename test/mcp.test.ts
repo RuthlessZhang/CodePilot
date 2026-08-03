@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
+import { createRequire } from "node:module";
 import type { AddressInfo } from "node:net";
 import { fileURLToPath } from "node:url";
 import os from "node:os";
@@ -89,6 +90,7 @@ input.on("line", (line) => {
 `;
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const packageVersion = (createRequire(import.meta.url)("../package.json") as { version: string }).version;
 
 function runCli(args: string[], credentialDirectory: string) {
   return new Promise<{ code: number | null; stdout: string; stderr: string }>((resolve, reject) => {
@@ -119,6 +121,7 @@ function configuration(servers: McpConfiguration["servers"], overrides: Partial<
 
 test("marks timed-out MCP tool side effects as unknown and never retries the call", async () => {
   let toolCalls = 0;
+  let clientVersion: string | undefined;
   const transport: Transport = {
     async start() {},
     async send(message: JSONRPCMessage) {
@@ -128,6 +131,7 @@ test("marks timed-out MCP tool side effects as unknown and never retries the cal
           jsonrpc: "2.0", id: message.id, error: { code: -32601, message: "Method not found" },
         }));
       } else if (message.method === "initialize") {
+        clientVersion = (message.params as { clientInfo?: { version?: string } }).clientInfo?.version;
         queueMicrotask(() => transport.onmessage?.({
           jsonrpc: "2.0", id: message.id, result: {
             protocolVersion: "2025-11-25",
@@ -147,6 +151,7 @@ test("marks timed-out MCP tool side effects as unknown and never retries the cal
     (error: Error) => error.name === "TimeoutError" && /side-effect outcome is unknown/.test(error.message),
   );
   assert.equal(toolCalls, 1);
+  assert.equal(clientVersion, packageVersion);
 });
 
 test("negotiates the modern MCP 2026 protocol through the official client", async () => {

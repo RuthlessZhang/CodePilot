@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { exec } from "node:child_process";
+import { createRequire } from "node:module";
 import { stdin, stdout } from "node:process";
 import { createInterface } from "node:readline/promises";
 import { Agent } from "./agent.js";
@@ -30,6 +31,8 @@ import { ToolRegistry } from "./tool-registry.js";
 import { UndoManager } from "./undo.js";
 import { resolveWorkspace } from "./workspace.js";
 import type { AgentMode, ProviderStreamEvent, ToolEvent } from "./types.js";
+
+const packageVersion = (createRequire(import.meta.url)("../package.json") as { version: string }).version;
 
 function argValue(args: string[], flag: string) {
   const index = args.indexOf(flag);
@@ -106,8 +109,40 @@ function help() {
 /exit                 Exit CodePilot`;
 }
 
+function usage() {
+  return `CodePilot ${packageVersion}
+
+Usage:
+  codepilot [options] [task]
+  codepilot auth <set|status|remove> [provider]
+  codepilot doctor [--json] [--cwd <workspace>]
+  codepilot init [--force] [--cwd <workspace>]
+  codepilot mcp status [--cwd <workspace>]
+
+Options:
+  --provider <name>            openai, deepseek, or anthropic
+  --model <name>               Override the Provider model
+  --cwd <workspace>            Select the workspace explicitly
+  --mode <plan|build>          Start in read-only or editing mode
+  --resume, --continue         Resume the latest workspace session
+  --session <id>               Resume an exact session
+  --headless                   Run one non-interactive task
+  --doctor                     Run credential-safe diagnostics
+  --json                       Print supported commands as JSON where available
+  --version, -v                Show the installed version
+  --help, -h                   Show this help`;
+}
+
 async function main() {
   const args = process.argv.slice(2);
+  if (["--version", "-v", "version"].includes(args[0] ?? "")) {
+    console.log(packageVersion);
+    return;
+  }
+  if (["--help", "-h", "help"].includes(args[0] ?? "")) {
+    console.log(usage());
+    return;
+  }
   if (args[0] === "auth") {
     await runAuthCommand(args.slice(1));
     return;
@@ -128,6 +163,11 @@ async function main() {
     } finally {
       await runtime.dispose();
     }
+    return;
+  }
+  if (args[0] === "init") {
+    const initRoot = await resolveWorkspace(process.cwd(), argValue(args, "--cwd"));
+    console.log(await initProject(initRoot, args.includes("--force")));
     return;
   }
   const headless = args.includes("--headless");
@@ -153,7 +193,7 @@ async function main() {
   if (config.providerRecordPath && config.providerReplayPath) {
     throw Error("Provider record and replay modes are mutually exclusive");
   }
-  if (args.includes("--doctor")) {
+  if (args[0] === "doctor" || args.includes("--doctor")) {
     const report = await diagnose(root, config, mcpConfiguration);
     console.log(args.includes("--json") ? JSON.stringify(report, null, 2) : formatDoctorReport(report));
     process.exitCode = report.status === "error" ? 1 : 0;

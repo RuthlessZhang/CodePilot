@@ -5,6 +5,9 @@ import {
   type Tool as OfficialMcpTool,
   type Transport,
 } from "@modelcontextprotocol/client";
+import { createRequire } from "node:module";
+
+const packageVersion = (createRequire(import.meta.url)("../package.json") as { version: string }).version;
 
 export type McpToolDefinition = {
   name: string;
@@ -48,7 +51,7 @@ export class McpClient {
     onToolsChanged?: McpToolsChanged,
   ) {
     this.client = new Client(
-      { name: "codepilot", version: "0.2.0" },
+      { name: "codepilot", version: packageVersion },
       {
         versionNegotiation: {
           mode: "auto",
