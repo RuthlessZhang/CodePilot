@@ -5,7 +5,7 @@ Validated on 2026-08-03. This record contains no credentials, prompts, response 
 ## Automated release gates
 
 - Local `npm run release:check`: passed after the RC trial fixes with 133 tests, a clean build, and an isolated global installation.
-- GitHub CI #20: passed all six Linux, Windows, and macOS jobs on Node.js 20 and 24 for commit `6117c0b`.
+- GitHub CI #21: passed all six Linux, Windows, and macOS jobs on Node.js 20 and 24 for the post-trial-fix commit `74565a8`.
 - npm dry-run package: `codepilot@0.3.0-rc.1`, 145 files, approximately 160 KB compressed.
 - Clean isolated global installation: passed on Windows; the CI matrix repeats it on Node.js 24 for every supported operating system.
 
@@ -40,6 +40,5 @@ The redacted local report is intentionally ignored by Git under `.codepilot/runs
 ## Remaining external gates
 
 - Authenticate an npm account that owns the unscoped `codepilot` name and configure the repository `NPM_TOKEN` secret.
-- Confirm the post-fix GitHub CI matrix is green.
 - Push the matching `v0.3.0-rc.1` tag only after the npm publishing credential is ready.
 - Before promotion to stable, run at least one build-mode trial and one non-trivial remote MCP trial in trusted test workspaces.
