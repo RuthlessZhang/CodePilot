@@ -64,3 +64,10 @@ test("release CLI doctor remains available without a credential", async () => {
   assert.equal(report.status, "error");
   assert.equal(report.credentialSource, "missing");
 });
+
+test("release workflow publishes an explicit local tarball path", async () => {
+  const workflow = await readFile(path.join(repositoryRoot, ".github", "workflows", "release.yml"), "utf8");
+  assert.match(workflow, /echo "tarball=\.\/release\/\$tarball"/);
+  assert.match(workflow, /npm publish "\$\{\{ steps\.pack\.outputs\.tarball \}\}"/);
+  assert.doesNotMatch(workflow, /echo "tarball=release\/\$tarball"/);
+});

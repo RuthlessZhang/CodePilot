@@ -36,7 +36,8 @@ jobs:
           mkdir release
           tarball=$(npm pack --pack-destination release --silent | tail -n 1)
           test -n "$tarball"
-          echo "tarball=release/$tarball" >> "$GITHUB_OUTPUT"
+          test -f "./release/$tarball"
+          echo "tarball=./release/$tarball" >> "$GITHUB_OUTPUT"
       - name: Publish to npm
         shell: bash
         env:
