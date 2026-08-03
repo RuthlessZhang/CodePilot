@@ -50,6 +50,16 @@ The redacted local report is intentionally ignored by Git under `.codepilot/runs
 - Findings: tool use did not converge quickly; permission-denied Shell variants were retried instead of switching to an allowed command; targeted verification invoked the full test runner and exceeded its 120-second timeout; tests that expect no credential were affected by the new persistent user credential until the test config directory was isolated.
 - Release decision: this is a successful safety and recovery exercise, but not yet a successful autonomous Build-mode gate. Address the convergence, verification targeting/timeout, and test credential-isolation findings before stable promotion.
 
+### Build-loop P0 follow-up
+
+- Targeted tests: `scripts/run-tests.mjs` now validates and honors explicit test-file arguments instead of always discovering the full suite.
+- Credential isolation: every standard test run receives a temporary user configuration directory and no inherited OpenAI, DeepSeek, or Anthropic API-key variables; the directory is removed after the child process closes.
+- Verification timeout: automatic checks use the independent `verificationTimeoutMs` setting and `--verification-timeout-ms <ms>` override, with a five-minute default per command.
+- Convergence: permission denials now prohibit wrapper/equivalent retries; a tool is removed from the model-visible set after its second denial, while trusted automatic verification retains access. Long read-only exploration receives a bounded convergence notice.
+- Verification: focused P0 tests passed 63/63 and the standard credential-isolated suite passed 145/145 without a live Provider request.
+- Release gate: `npm run release:check` passed typecheck, 145 tests, production build, and isolated global package installation in 164 seconds.
+- Release decision: the known P0 findings from the first Build trial are implemented and locally verified. The autonomous Build-mode gate remains open until a new live trial completes without manual repair.
+
 ## Remaining external gates
 
 - npm Trusted Publishing is deferred until the maintainer can complete npm's passkey authentication from a local, non-remote session. The validated bootstrap-token release path remains active and does not block RC testing.

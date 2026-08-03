@@ -34,6 +34,7 @@ export type Config = {
   memoryTopicLimit: number;
   autoVerify: boolean;
   maxVerificationAttempts: number;
+  verificationTimeoutMs: number;
   providerMaxRetries: number;
   providerRequestTimeoutMs: number;
   providerRecordPath?: string;
@@ -208,6 +209,12 @@ export async function loadConfig(
     ),
     autoVerify: fileConfig.autoVerify ?? true,
     maxVerificationAttempts: fileConfig.maxVerificationAttempts ?? 3,
+    verificationTimeoutMs: boundedInteger(
+      overrides.verificationTimeoutMs ?? fileConfig.verificationTimeoutMs,
+      300_000,
+      1_000,
+      900_000,
+    ),
     providerMaxRetries: boundedInteger(overrides.providerMaxRetries ?? fileConfig.providerMaxRetries, 2, 0, 5),
     providerRequestTimeoutMs: boundedInteger(
       overrides.providerRequestTimeoutMs ?? fileConfig.providerRequestTimeoutMs,

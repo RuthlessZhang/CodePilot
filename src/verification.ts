@@ -37,6 +37,7 @@ type VerificationOptions = {
   tools: Tool[];
   approve: (risk: Risk, name: string, args: Record<string, unknown>) => Promise<boolean>;
   onToolEvent?: (event: ToolEvent) => void;
+  timeoutMs?: number;
 };
 
 const languageExtensions = new Set([".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".py"]);
@@ -223,7 +224,7 @@ export class VerificationController {
           signal?.throwIfAborted();
           const check = await this.executeCheck(
             shell,
-            { command },
+            { command, timeout_ms: this.options.timeoutMs ?? 300_000 },
             "targeted_test",
             command,
             signal,
@@ -243,7 +244,7 @@ export class VerificationController {
           signal?.throwIfAborted();
           const check = await this.executeCheck(
             shell,
-            { command },
+            { command, timeout_ms: this.options.timeoutMs ?? 300_000 },
             "command",
             command,
             signal,

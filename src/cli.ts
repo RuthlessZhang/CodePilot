@@ -66,7 +66,7 @@ function promptFromArgs(args: string[]) {
   const flagsWithValues = new Set([
     "--provider", "--model", "--mode", "--cwd", "--session", "--max-runtime-ms", "--max-steps",
     "--max-tool-calls", "--max-run-input-tokens", "--max-run-output-tokens", "--max-run-total-tokens",
-    "--output", "--patch-output", "--record-provider", "--replay-provider",
+    "--verification-timeout-ms", "--output", "--patch-output", "--record-provider", "--replay-provider",
   ]);
   return args
     .filter((arg, index) => !arg.startsWith("--") && !flagsWithValues.has(args[index - 1]))
@@ -124,6 +124,7 @@ Options:
   --model <name>               Override the Provider model
   --cwd <workspace>            Select the workspace explicitly
   --mode <plan|build>          Start in read-only or editing mode
+  --verification-timeout-ms <ms>  Automatic verification timeout per command
   --resume, --continue         Resume the latest workspace session
   --session <id>               Resume an exact session
   --headless                   Run one non-interactive task
@@ -191,6 +192,7 @@ async function main() {
     maxRunOutputTokens: integerArg(args, "--max-run-output-tokens"),
     maxRunTotalTokens: integerArg(args, "--max-run-total-tokens"),
     headlessMaxRuntimeMs: integerArg(args, "--max-runtime-ms"),
+    verificationTimeoutMs: integerArg(args, "--verification-timeout-ms"),
     providerRecordPath: argValue(args, "--record-provider"),
     providerReplayPath: argValue(args, "--replay-provider"),
   });
@@ -307,6 +309,7 @@ async function main() {
       memoryTopicLimit: config.memoryTopicLimit,
       autoVerify: config.autoVerify,
       maxVerificationAttempts: config.maxVerificationAttempts,
+      verificationTimeoutMs: config.verificationTimeoutMs,
       mode,
       onText: headless && !verbose ? undefined : (text) => console.log(text),
       onProviderEvent: headless && !verbose ? undefined : renderProviderEvent,
@@ -462,7 +465,7 @@ async function main() {
         continue;
       }
       if (question === "/check") {
-        console.log(await runChecks(root));
+        console.log(await runChecks(root, config.verificationTimeoutMs));
         continue;
       }
       if (question === "/doctor") {

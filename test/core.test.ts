@@ -21,9 +21,9 @@ import { createTools, resolveInWorkspace } from "../src/tools.js";
 import { UndoManager } from "../src/undo.js";
 import { selectWorkspaceContext } from "../src/workspace-context.js";
 import { resolveWorkspace } from "../src/workspace.js";
-import { parseVerificationFailures } from "../src/verification.js";
+import { parseVerificationFailures, VerificationController } from "../src/verification.js";
 import { listSessions } from "../src/sessions.js";
-import type { Provider } from "../src/types.js";
+import type { Provider, Tool } from "../src/types.js";
 
 test("blocks traversal", () => {
   assert.throws(() => resolveInWorkspace(path.resolve("x"), "../y"));
@@ -452,6 +452,84 @@ test("reports automatic verification as incomplete when required permission is d
   assert.equal(report.finalStatus, "skipped");
 });
 
+test("removes a tool from model-visible definitions after repeated permission denials", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "codepilot-permission-convergence-"));
+  let calls = 0;
+  let finalTools: string[] = [];
+  let finalMessages: import("../src/types.js").Message[] = [];
+  const provider: Provider = {
+    async complete(input) {
+      calls++;
+      if (calls <= 2) {
+        return {
+          text: "",
+          toolCalls: [{
+            id: `shell-${calls}`,
+            name: "shell",
+            arguments: { command: calls === 1 ? "node blocked.js" : "npx blocked" },
+          }],
+        };
+      }
+      finalTools = input.tools.map((tool) => tool.name);
+      finalMessages = input.messages;
+      return { text: "done", toolCalls: [] };
+    },
+  };
+  const agent = new Agent({
+    root,
+    provider,
+    tools: createTools(root),
+    approve: async () => false,
+    maxSteps: 4,
+    maxToolCalls: 10,
+    contextBudgetTokens: 64_000,
+    mode: "build",
+    autoVerify: false,
+  });
+
+  assert.equal(await agent.run("try a command"), "done");
+  assert.equal(calls, 3);
+  assert.equal(finalTools.includes("shell"), false);
+  const denials = finalMessages.filter((message) => message.role === "tool").map((message) => message.content);
+  assert.match(denials[0], /without cd prefixes, redirection, wrappers/i);
+  assert.match(denials[1], /disabled for the remainder of this run/i);
+});
+
+test("nudges a build run to converge after repeated read-only exploration", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "codepilot-read-convergence-"));
+  await writeFile(path.join(root, "note.txt"), "evidence\n");
+  let calls = 0;
+  let finalMessages: import("../src/types.js").Message[] = [];
+  const provider: Provider = {
+    async complete(input) {
+      calls++;
+      if (calls <= 6) {
+        return {
+          text: "",
+          toolCalls: [{ id: `read-${calls}`, name: "read_file", arguments: { path: "note.txt" } }],
+        };
+      }
+      finalMessages = input.messages;
+      return { text: "done", toolCalls: [] };
+    },
+  };
+  const agent = new Agent({
+    root,
+    provider,
+    tools: createTools(root),
+    approve: async () => true,
+    maxSteps: 8,
+    maxToolCalls: 24,
+    contextBudgetTokens: 64_000,
+    mode: "build",
+    autoVerify: false,
+  });
+
+  assert.equal(await agent.run("inspect briefly"), "done");
+  const results = finalMessages.filter((message) => message.role === "tool").map((message) => message.content);
+  assert.match(results.at(-1) ?? "", /Convergence notice/);
+});
+
 test("does not resend empty tool call arrays from prior turns", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "codepilot-"));
   let received: import("../src/types.js").Message[] = [];
@@ -809,6 +887,36 @@ test("selects related JavaScript and Python tests before full verification", asy
   assert.match(commands[0], /pytest .*test_reader\.py.* -q/);
   assert.match(commands[1], /npm test -- .*parser\.test\.ts/);
   assert.doesNotMatch(commands.join("\n"), /unrelated/);
+});
+
+test("automatic verification applies its configured timeout to targeted and project commands", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "codepilot-verification-timeout-"));
+  await mkdir(path.join(root, "src"));
+  await mkdir(path.join(root, "test"));
+  await writeFile(path.join(root, "package.json"), JSON.stringify({ scripts: { test: "node --test" } }));
+  await writeFile(path.join(root, "src", "parser.ts"), "export const parse = () => 1;\n");
+  await writeFile(path.join(root, "test", "parser.test.ts"), "test('parser', () => {});\n");
+  const seenTimeouts: unknown[] = [];
+  const shell: Tool = {
+    definition: { name: "shell", description: "test shell", inputSchema: {} },
+    risk: "execute",
+    async execute(args) {
+      seenTimeouts.push(args.timeout_ms);
+      return "exit_code: 0\n";
+    },
+  };
+  const verification = new VerificationController({
+    root,
+    tools: [shell],
+    approve: async () => true,
+    timeoutMs: 4_567,
+  });
+  verification.recordToolSuccess("write_file", { path: "src/parser.ts" });
+
+  const result = await verification.verify();
+  assert.equal(result.status, "passed");
+  assert.ok(seenTimeouts.length >= 2);
+  assert.ok(seenTimeouts.every((value) => value === 4_567));
 });
 
 test("parses common test and compiler failures into structured records", () => {

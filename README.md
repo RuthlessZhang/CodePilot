@@ -109,7 +109,7 @@ $env:ANTHROPIC_API_KEY="..."
 npm run dev -- --provider anthropic
 ```
 
-CodePilot also reads `.codepilot.json` for `provider`, `model`, `baseUrl`, runtime limits, context and memory budgets, verification, provider retry, Shell limits, permissions, runtime auditing, and protected paths. Keep credentials in the user store, a user-level helper, or environment variables. The context-specific settings are documented under [Context Window Management](#context-window-management).
+CodePilot also reads `.codepilot.json` for `provider`, `model`, `baseUrl`, runtime limits, context and memory budgets, verification and per-command verification timeout, provider retry, Shell limits, permissions, runtime auditing, and protected paths. Keep credentials in the user store, a user-level helper, or environment variables. The context-specific settings are documented under [Context Window Management](#context-window-management).
 
 Provider defaults and adapter behavior are defined in one capability catalog. The catalog distinguishes streaming, Usage, forced tool selection, thinking mode, reasoning continuation, and prompt-cache accounting from model context limits. Run `npm run dev -- --doctor` to inspect the effective provider, model, endpoint, credential source, capabilities, dependencies, verification commands, and context budgets without making an API request or printing credential values. Add `--json` for machine-readable output.
 
@@ -288,10 +288,13 @@ In build mode, CodePilot tracks successful `apply_patch`, `write_file`, and `rep
 
 Automatic Shell checks still use normal CodePilot permissions. A denied or unavailable required check is reported as `skipped`, never as `passed`.
 
+Automatic verification uses a separate five-minute per-command timeout by default, so normal interactive Shell calls can keep their shorter default. Configure it with `verificationTimeoutMs` or the one-shot `--verification-timeout-ms` flag. Project test scripts must forward explicit file arguments for targeted selection to stay targeted; CodePilot's own test runner does this and also isolates user credentials and Provider API-key environment variables from tests.
+
 ```json
 {
   "autoVerify": true,
-  "maxVerificationAttempts": 3
+  "maxVerificationAttempts": 3,
+  "verificationTimeoutMs": 300000
 }
 ```
 

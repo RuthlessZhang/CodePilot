@@ -4,6 +4,21 @@ All notable changes to CodePilot are documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- Configurable automatic-verification command timeout through `verificationTimeoutMs` and `--verification-timeout-ms`, defaulting to five minutes.
+
+### Changed
+
+- Repeatedly denied tools are removed from the model-visible tool set for the rest of the run while remaining available to trusted automatic verification.
+- Build-mode guidance and runtime notices now push long read-only exploration toward a scoped edit, focused tests, or finalization.
+- The test runner honors explicit test-file arguments and launches tests with an isolated credential directory and no inherited Provider API keys.
+
+### Fixed
+
+- Targeted JavaScript verification no longer silently expands into the full CodePilot test suite.
+- Persisted user credentials no longer make credential-free unit tests perform live Provider calls.
+
 ## [0.3.0-rc.1] - 2026-08-03
 
 ### Added

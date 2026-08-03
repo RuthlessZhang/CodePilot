@@ -131,7 +131,9 @@ export async function diagnose(root: string, config: Config, mcp?: McpConfigurat
     checks.push({
       name: "verification",
       status: index.checkCommands.length ? "pass" : "warning",
-      detail: index.checkCommands.join(", ") || "No project verification commands detected.",
+      detail: index.checkCommands.length
+        ? `${index.checkCommands.join(", ")} (timeout=${config.verificationTimeoutMs}ms per command)`
+        : "No project verification commands detected.",
     });
   } catch (error) {
     checks.push({ name: "verification", status: "warning", detail: `Could not inspect project checks: ${(error as Error).name}` });

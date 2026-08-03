@@ -79,6 +79,7 @@ export type AgentOptions = {
   mode: AgentMode;
   autoVerify?: boolean;
   maxVerificationAttempts?: number;
+  verificationTimeoutMs?: number;
   onText?: (text: string) => void;
   onProviderEvent?: (event: ProviderStreamEvent) => void;
   onToolEvent?: (event: ToolEvent) => void;
@@ -200,16 +201,24 @@ export class Agent {
       tools: this.tools.list(),
       approve: this.options.approve,
       onToolEvent: this.options.onToolEvent,
+      timeoutMs: this.options.verificationTimeoutMs,
     });
     let verificationAttempts = 0;
     let previousFailure = "";
     let lastVerification: VerificationResult | undefined;
     let toolBudgetNudged = false;
+    const permissionDenials = new Map<string, number>();
+    const blockedModelTools = new Set<string>();
+    let exploratoryReads = 0;
+    let explorationNudged = false;
+    const explorationThreshold = Math.min(12, Math.max(6, Math.floor((this.options.maxToolCalls ?? 100) * 0.25)));
 
     for (let step = 0; step < this.options.maxSteps; step++) {
       signal.throwIfAborted();
       if (this.activeRunStats) this.activeRunStats.modelSteps = step + 1;
       await this.checkpoint(runId, "context", step + 1);
+      const exposedToolDefinitions = this.tools.definitions()
+        .filter((definition) => !blockedModelTools.has(definition.name));
       let packed = this.pack(await system(
         this.options.root,
         this.options.mode,
@@ -217,7 +226,7 @@ export class Agent {
         prompt,
         this.workspaceContext,
         memoryOptions(this.options),
-      ));
+      ), exposedToolDefinitions);
       if (packed.report.omittedMessages > 0) {
         const oldMessages = this.messages.slice(0, packed.report.omittedMessages);
         const summary = await summarizeWithDeepSeekFlash(oldMessages);
@@ -238,7 +247,7 @@ export class Agent {
           prompt,
           this.workspaceContext,
           memoryOptions(this.options),
-        ));
+        ), exposedToolDefinitions);
       }
       this.lastContextReport = packed.report;
       await this.emitRuntime(runId, "context.prepared", {
@@ -257,7 +266,7 @@ export class Agent {
       await this.emitRuntime(runId, "model.requested", {
         step: step + 1,
         messageCount: packed.messages.length,
-        toolCount: this.tools.list().length,
+        toolCount: exposedToolDefinitions.length,
         maxOutputTokens: requestMaxOutputTokens,
       }, signal);
       const modelStartedAt = Date.now();
@@ -268,7 +277,7 @@ export class Agent {
       const response = await this.options.provider.complete({
         system: packed.system,
         messages: packed.messages.map(withoutEmptyToolCalls),
-        tools: this.tools.definitions(),
+        tools: exposedToolDefinitions,
         signal,
         maxOutputTokens: requestMaxOutputTokens,
         ...(this.options.onProviderEvent ? {
@@ -388,6 +397,11 @@ export class Agent {
         } else if (!tool) {
           if (this.activeRunStats) this.activeRunStats.toolCalls++;
           await this.emitRuntime(runId, "tool.failed", { name: call.name, reason: content }, signal);
+        } else if (blockedModelTools.has(call.name)) {
+          if (this.activeRunStats) this.activeRunStats.toolCalls++;
+          content = `Permission denied: ${call.name} is disabled for the remainder of this run after repeated denials. Do not retry it or an equivalent command; continue without it and provide a final answer when ready.`;
+          this.emitTool({ phase: "failed", name: call.name, args: call.arguments, content });
+          await this.emitRuntime(runId, "tool.failed", { name: call.name, risk: tool.risk, reason: content }, signal);
         } else if (this.options.mode === "plan" && tool.risk !== "read") {
           if (this.activeRunStats) this.activeRunStats.toolCalls++;
           content = `Permission denied: CodePilot is in plan mode, so ${tool.risk} tools are disabled.`;
@@ -405,7 +419,13 @@ export class Agent {
             this.emitTool({ phase: "failed", name: call.name, args: call.arguments, content });
             await this.emitRuntime(runId, "tool.failed", { name: call.name, risk: tool.risk, reason: content }, signal);
           } else if (!(await this.options.approve(tool.risk, call.name, call.arguments))) {
-            content = "Permission denied";
+            const denialCount = (permissionDenials.get(call.name) ?? 0) + 1;
+            permissionDenials.set(call.name, denialCount);
+            if (denialCount >= 2) blockedModelTools.add(call.name);
+            const shellGuidance = call.name === "shell"
+              ? " Use only an explicitly allowed command exactly as configured—without cd prefixes, redirection, wrappers, alternate shells, npx, node, or equivalent variants. If no allowed command fits, stop calling shell and provide a final answer so automatic verification can run."
+              : " Do not retry the same operation through an equivalent tool call; continue with permitted tools or provide a final answer.";
+            content = `Permission denied by the current policy.${shellGuidance}${denialCount >= 2 ? ` ${call.name} is now disabled for the remainder of this run after repeated denials.` : ""}`;
             this.emitTool({ phase: "failed", name: call.name, args: call.arguments, content });
             await this.emitRuntime(runId, "tool.failed", { name: call.name, risk: tool.risk, reason: content }, signal);
           } else {
@@ -434,6 +454,15 @@ export class Agent {
                 invalidateCodeGraph(this.options.root);
               }
               verification.recordToolSuccess(call.name, call.arguments, content);
+              if (tool.risk === "read") {
+                exploratoryReads++;
+                if (!explorationNudged && exploratoryReads >= explorationThreshold) {
+                  explorationNudged = true;
+                  content += "\n\nConvergence notice: this run has accumulated many read-only tool calls without an edit or command. Stop broad exploration; use the evidence already collected to make the scoped change, update focused tests, or provide a final answer. Read more only if the latest result reveals a concrete blocker.";
+                }
+              } else {
+                exploratoryReads = 0;
+              }
               const durationMs = Date.now() - startedAt;
               if (this.activeRunStats) this.activeRunStats.toolDurationMs += durationMs;
               if (tool.risk === "write") {
@@ -537,12 +566,12 @@ export class Agent {
     await saveSession(this.options.root, this.sessionId, this.sessionCreatedAt, this.messages);
   }
 
-  private pack(systemContext: SystemContext) {
+  private pack(systemContext: SystemContext, toolDefinitions = this.tools.definitions()) {
     return packContext(systemContext, this.messages, this.options.contextBudgetTokens, {
       contextWindowTokens: this.options.contextWindowTokens,
       outputReserveTokens: this.options.maxOutputTokens,
       safetyMarginTokens: this.options.contextSafetyMarginTokens,
-      toolDefinitions: this.tools.definitions(),
+      toolDefinitions,
       toolResultMaxTokens: this.options.toolResultMaxTokens,
       oldToolResultMaxTokens: this.options.oldToolResultMaxTokens,
     });
@@ -815,6 +844,8 @@ async function system(
 ${modeRules}
 Inspect before editing, stay in the workspace, preserve user changes, and run relevant tests.
 Use the smallest useful set of tool calls. Never repeat a tool call when its result is already available in the conversation; batch independent reads, then stop exploring and answer once you have enough evidence.
+Treat every permission denial as final for that attempted operation. Do not retry it with command wrappers, redirection, alternate executables, or semantically equivalent tools; switch to an explicitly permitted action or finish so automatic verification can run.
+After a scoped edit and focused tests are identified, stop using search, grep, code-graph, or LSP merely to reconfirm known facts. Complete the tests and finish.
 Before editing code, use the pre-edit impact analysis when available; confirm uncertain callers or dynamic relationships with impact_analysis, code_graph, LSP, or search.
 For multi-step coding tasks, use todo_write to keep an explicit task list and update it as work progresses.
 Prefer apply_patch for code edits; use write_file only when creating or replacing a whole file is clearer.

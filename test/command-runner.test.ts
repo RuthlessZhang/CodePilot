@@ -66,10 +66,12 @@ test("shell tool and project config expose command limits", async () => {
   await writeFile(path.join(root, ".codepilot.json"), JSON.stringify({
     shellTimeoutMs: 3456,
     shellMaxOutputChars: 2345,
+    verificationTimeoutMs: 4567,
   }));
   const config = await loadConfig(root);
   assert.equal(config.shellTimeoutMs, 3456);
   assert.equal(config.shellMaxOutputChars, 2345);
+  assert.equal(config.verificationTimeoutMs, 4567);
   const shell = createTools(root, { shellTimeoutMs: 100 }).find((tool) => tool.definition.name === "shell");
   assert.ok(shell);
   const output = await shell.execute({ command: `${node} -e "setTimeout(()=>{},5000)"` });

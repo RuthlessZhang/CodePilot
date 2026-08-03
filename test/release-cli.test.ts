@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdtemp, readFile } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import os from "node:os";
 import path from "node:path";
@@ -41,6 +41,7 @@ test("release CLI exposes version and help without a credential", async () => {
   assert.match(help.stdout, /Usage:/);
   assert.match(help.stdout, /codepilot doctor/);
   assert.match(help.stdout, /codepilot init/);
+  assert.match(help.stdout, /--verification-timeout-ms/);
 });
 
 test("release package uses the public npm scope and preserves the codepilot executable", async () => {
@@ -70,6 +71,18 @@ test("release CLI doctor remains available without a credential", async () => {
   const report = JSON.parse(result.stdout);
   assert.equal(report.status, "error");
   assert.equal(report.credentialSource, "missing");
+});
+
+test("release CLI applies the automatic verification timeout override", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "codepilot-release-timeout-"));
+  const configDirectory = await mkdtemp(path.join(os.tmpdir(), "codepilot-release-config-"));
+  await writeFile(path.join(root, "package.json"), JSON.stringify({ scripts: { test: "node --test" } }));
+  const result = await runCli([
+    "doctor", "--json", "--cwd", root, "--verification-timeout-ms", "4567",
+  ], configDirectory);
+  assert.equal(result.code, 1, result.stderr);
+  const report = JSON.parse(result.stdout);
+  assert.match(report.checks.find((check: { name: string }) => check.name === "verification").detail, /timeout=4567ms/);
 });
 
 test("--mode with an invalid value exits non-zero with a clear error", async () => {
