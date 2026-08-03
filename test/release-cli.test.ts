@@ -72,6 +72,46 @@ test("release CLI doctor remains available without a credential", async () => {
   assert.equal(report.credentialSource, "missing");
 });
 
+test("--mode with an invalid value exits non-zero with a clear error", async () => {
+  const configDirectory = await mkdtemp(path.join(os.tmpdir(), "codepilot-release-config-"));
+  const result = await runCli(["--mode", "invalid"], configDirectory);
+  assert.notEqual(result.code, 0, "invalid --mode should exit non-zero");
+  assert.match(result.stderr, /--mode must be 'plan' or 'build'/);
+  assert.doesNotMatch(result.stderr, /Missing API key/);
+});
+
+test("--mode without a value exits non-zero instead of defaulting to build", async () => {
+  const configDirectory = await mkdtemp(path.join(os.tmpdir(), "codepilot-release-config-"));
+  const result = await runCli(["--mode"], configDirectory);
+  assert.notEqual(result.code, 0, "missing --mode value should exit non-zero");
+  assert.match(result.stderr, /--mode requires a value: 'plan' or 'build'/);
+  assert.doesNotMatch(result.stderr, /Missing API key/);
+});
+
+test("--mode plan is accepted past mode validation (fails on missing credential instead)", async () => {
+  const configDirectory = await mkdtemp(path.join(os.tmpdir(), "codepilot-release-config-"));
+  const result = await runCli(["--mode", "plan"], configDirectory);
+  assert.notEqual(result.code, 0);
+  assert.match(result.stderr, /Missing API key/);
+  assert.doesNotMatch(result.stderr, /--mode must be 'plan' or 'build'/);
+});
+
+test("--mode build is accepted past mode validation (fails on missing credential instead)", async () => {
+  const configDirectory = await mkdtemp(path.join(os.tmpdir(), "codepilot-release-config-"));
+  const result = await runCli(["--mode", "build"], configDirectory);
+  assert.notEqual(result.code, 0);
+  assert.match(result.stderr, /Missing API key/);
+  assert.doesNotMatch(result.stderr, /--mode must be 'plan' or 'build'/);
+});
+
+test("omitting --mode defaults to build and passes mode validation (fails on missing credential instead)", async () => {
+  const configDirectory = await mkdtemp(path.join(os.tmpdir(), "codepilot-release-config-"));
+  const result = await runCli([], configDirectory);
+  assert.notEqual(result.code, 0);
+  assert.match(result.stderr, /Missing API key/);
+  assert.doesNotMatch(result.stderr, /--mode must be 'plan' or 'build'/);
+});
+
 test("release workflow publishes an explicit local tarball path", async () => {
   const workflow = await readFile(path.join(repositoryRoot, ".github", "workflows", "release.yml"), "utf8");
   assert.match(workflow, /echo "tarball=\.\/release\/\$tarball"/);

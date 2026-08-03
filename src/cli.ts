@@ -173,8 +173,14 @@ async function main() {
   const headless = args.includes("--headless");
   const verbose = args.includes("--verbose");
   const root = await resolveWorkspace(process.cwd(), argValue(args, "--cwd"));
+  const hasCliMode = args.includes("--mode");
   const cliMode = argValue(args, "--mode") as AgentMode | undefined;
-  let mode: AgentMode = cliMode === "plan" ? "plan" : "build";
+  if (hasCliMode && cliMode !== "plan" && cliMode !== "build") {
+    throw Error(cliMode === undefined
+      ? "--mode requires a value: 'plan' or 'build'"
+      : `--mode must be 'plan' or 'build', got '${cliMode}'`);
+  }
+  let mode: AgentMode = cliMode ?? "build";
 
   const config = await loadConfig(root, {
     provider: argValue(args, "--provider") as any,

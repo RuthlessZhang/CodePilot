@@ -39,8 +39,19 @@ The redacted local report is intentionally ignored by Git under `.codepilot/runs
 - Safety result: the run artifact contained a zero-byte patch and the existing user changes were preserved.
 - Action: headless patch capture now compares temporary Git trees created at run start and completion, excluding `.codepilot/**` and leaving the real index untouched.
 
+### CodePilot CLI safety fix
+
+- Workspace: an isolated Git worktree on `trial/build-mode-invalid-mode` with write access, protected release/configuration paths, and a narrow Shell allowlist.
+- Mode: headless BUILD, live DeepSeek, persistent user-store credential, automatic verification enabled.
+- Task result: the agent produced the core invalid-`--mode` check and regression tests, but did not complete autonomously. Three resumable runs consumed 50 model steps and 55 tool calls before step or input-token budgets stopped them.
+- Safety result: denied Shell commands failed closed, the main worktree remained untouched, protected files were not modified by the agent, and every incomplete run emitted a structured result plus patch artifact.
+- Review result: independent review caught an invalid `const` change and the uncovered bare `--mode` case. The final reviewed patch rejects invalid and missing values while preserving omitted, `plan`, and `build` behavior.
+- Verification: focused CLI tests passed 10/10, the isolated full suite passed 139/139, TypeScript typecheck passed, the production build passed, and `git diff --check` passed.
+- Findings: tool use did not converge quickly; permission-denied Shell variants were retried instead of switching to an allowed command; targeted verification invoked the full test runner and exceeded its 120-second timeout; tests that expect no credential were affected by the new persistent user credential until the test config directory was isolated.
+- Release decision: this is a successful safety and recovery exercise, but not yet a successful autonomous Build-mode gate. Address the convergence, verification targeting/timeout, and test credential-isolation findings before stable promotion.
+
 ## Remaining external gates
 
 - npm Trusted Publishing is deferred until the maintainer can complete npm's passkey authentication from a local, non-remote session. The validated bootstrap-token release path remains active and does not block RC testing.
 - After Trusted Publishing is configured for `@ruthlessz/codepilot`, `RuthlessZhang/CodePilot`, and `release.yml`, verify one token-free prerelease before deleting and revoking the bootstrap token.
-- Before promotion to stable, run at least one build-mode trial and one non-trivial remote MCP trial in trusted test workspaces.
+- Before promotion to stable, repeat Build mode until one reviewed trial completes autonomously, and run one non-trivial remote MCP trial in a trusted test workspace.
